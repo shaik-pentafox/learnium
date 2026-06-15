@@ -23,7 +23,7 @@ Groups, business domains/sub-domains, and training cohorts exist in the legacy a
 ### What gets deleted from the planned schema
 
 - Models: `Group`, `UserGroup`, `Domain`, `SubDomain`, `Cohort`, `UserCohort`.
-- FK columns: `Session.groupId/cohortId`, `Persona.domainId`, `PersonaGroup` join table, `ContentItem.groupId`, `Announcement.groupId`, `ImportReport.groupId`, `UserPerformanceScore.cohortId/groupId`, `AnalyticsSessionRollup.groupId/cohortId`.
+- FK columns: `Session.groupId/cohortId`, `Persona.domainId`, `PersonaGroup` join table, `Announcement.groupId`, `ImportReport.groupId`, `UserPerformanceScore.cohortId/groupId`, `AnalyticsSessionRollup.groupId/cohortId`.
 - Endpoints: all of `/api/v1/groups`, `/api/v1/domains`, `/api/v1/cohorts`.
 - Permissions: `groups:*`, `cohorts:*`; every "own-group" qualifier in the RBAC map.
 
@@ -32,7 +32,6 @@ Groups, business domains/sub-domains, and training cohorts exist in the legacy a
 | Was scoped by group/cohort | Becomes |
 |---|---|
 | Persona visibility | Per-persona explicit assignment: new `PersonaAssignment` (personaId, userId) join table + an `isPublic` flag on `Persona` (public = visible to all trainees). Trainers assign personas to trainees directly or publish to everyone. |
-| Content visibility | Same pattern: `isPublic` flag + optional `ContentAssignment` table. Default public. |
 | Leaderboard views | Two scopes only: **Global** (all trainees) and **My Trainees** (trainer's supervisees — the existing supervisor self-reference on `User` is kept and becomes the only organizational relationship). `UserPerformanceScore` keeps a single global rank + percentile. |
 | Trainer analytics scope | Supervisor mapping: a trainer sees analytics for users where `supervisorId = trainer.id` (transitively if needed later). |
 | Cohort ranking badges (Top 10% / Podium / Champion) | Computed against the global trainee population. Badge definitions unchanged otherwise. |
@@ -288,7 +287,7 @@ Removed: per-provider key references; LiteLLM static model list.
 | Change | Models |
 |---|---|
 | Removed (E1) | `Group`, `UserGroup`, `Domain`, `SubDomain`, `Cohort`, `UserCohort`, `PersonaGroup` + all referencing FK columns |
-| Added (E1) | `PersonaAssignment`, `ContentAssignment`; `isPublic` on `Persona`/`ContentItem` |
+| Added (E1) | `PersonaAssignment`; `isPublic` on `Persona` |
 | Added (E3) | `isSimulation` on `Session`, `LlmLog` |
 | Added (E4) | `cacheHit` on `LlmLog` |
 | Added (E5) | `SessionSummary`; `mode: "prune"` value on `LlmLog` |
@@ -326,7 +325,9 @@ Removed: per-provider key references; LiteLLM static model list.
 
 ## 10. Follow-up Doc Edits
 
-Fold-back tasks once this plan is approved:
+> **Status: applied.** E1–E7 have been folded back into PRODUCT_PLAN and BACKEND_PLAN (schema, endpoints, jobs, RBAC, env, phases) and FRONTEND_PLAN (dashboard, playground, BYOK key admin, global/my-trainees leaderboard). The Content Library ("Curate") concept was also removed from all three docs. This list is retained as the change map.
+
+Fold-back tasks (now applied):
 
 1. PRODUCT_PLAN §2/§3: remove group/cohort scoping from roles table, leaderboard views (→ Global + My Trainees), and dashboard descriptions; add playground to Trainer role.
 2. PRODUCT_PLAN §5.4: replace `credentialRef` design with E6 summary.
