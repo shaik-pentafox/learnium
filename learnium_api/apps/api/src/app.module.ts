@@ -14,6 +14,7 @@ import { AuthModule } from './modules/auth/auth.module';
 import { QueueModule } from './core/queue/queue.module';
 import { IdentityModule } from './modules/identity/identity.module';
 import { PersonasModule } from './modules/personas/personas.module';
+import { SessionsModule } from './modules/sessions/sessions.module';
 import type { Env } from './core/config/env.schema';
 
 @Module({
@@ -39,6 +40,7 @@ import type { Env } from './core/config/env.schema';
     QueueModule,
     IdentityModule,
     PersonasModule,
+    SessionsModule,
   ],
   providers: [
     { provide: APP_FILTER, useClass: AllExceptionsFilter },

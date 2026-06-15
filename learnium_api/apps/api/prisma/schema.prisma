@@ -42,6 +42,7 @@ model User {
   credential      DefaultCredential?
   refreshTokens   RefreshToken[]
   realtimeTickets RealtimeTicket[]
+  sessions        Session[]
 
   @@map("users")
 }
@@ -112,6 +113,7 @@ model Persona {
   versions           PersonaVersion[]
   scoreCriteria      ScoreCriterion[]
   assignedUsers      User[]           @relation("AssignedPersona")
+  sessions           Session[]
 
   @@map("personas")
 }
@@ -142,8 +144,61 @@ model ScoreCriterion {
   weight      Float   @default(1.0)
   order       Int     @default(0)
 
+  scoreResults ScoreResult[]
+
   @@index([personaId])
   @@map("score_criteria")
+}
+
+// ── Sessions ──────────────────────────────────────────────────────────────────
+
+model Session {
+  id        Int           @id @default(autoincrement())
+  uid       String        @unique @default(uuid())
+  userId    Int
+  user      User          @relation(fields: [userId], references: [id])
+  personaId Int
+  persona   Persona       @relation(fields: [personaId], references: [id])
+  status    String        @default("ACTIVE") // ACTIVE | COMPLETED | ABANDONED
+  feedback  String?
+  startedAt DateTime      @default(now())
+  endedAt   DateTime?
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+  messages  ChatMessage[]
+  scores    ScoreResult[]
+
+  @@index([userId])
+  @@index([personaId])
+  @@map("sessions")
+}
+
+model ChatMessage {
+  id         Int      @id @default(autoincrement())
+  sessionId  Int
+  session    Session  @relation(fields: [sessionId], references: [id])
+  role       String   // user | assistant
+  content    String
+  tokenCount Int?
+  createdAt  DateTime @default(now())
+
+  @@index([sessionId])
+  @@map("chat_messages")
+}
+
+model ScoreResult {
+  id          Int            @id @default(autoincrement())
+  sessionId   Int
+  session     Session        @relation(fields: [sessionId], references: [id])
+  criterionId Int
+  criterion   ScoreCriterion @relation(fields: [criterionId], references: [id])
+  score       Float?
+  maxScore    Int
+  feedback    String?
+  createdAt   DateTime       @default(now())
+
+  @@index([sessionId])
+  @@map("score_results")
 }
 
 // ── Bulk Import ───────────────────────────────────────────────────────────────
