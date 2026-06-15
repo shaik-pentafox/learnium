@@ -1,6 +1,7 @@
 import 'reflect-metadata';
 import { NestFactory } from '@nestjs/core';
 import { FastifyAdapter, NestFastifyApplication } from '@nestjs/platform-fastify';
+import { WsAdapter } from '@nestjs/platform-ws';
 import fastifyMultipart from '@fastify/multipart';
 import { ConfigService } from '@nestjs/config';
 import { Logger } from 'nestjs-pino';
@@ -15,6 +16,7 @@ async function bootstrap(): Promise<void> {
   );
 
   app.useLogger(app.get(Logger));
+  app.useWebSocketAdapter(new WsAdapter(app));
   await app.register(fastifyMultipart, { limits: { fileSize: 50 * 1024 * 1024 } });
 
   const config = app.get(ConfigService<Env, true>);
