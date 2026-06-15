@@ -7,11 +7,12 @@ services:
     environment:
       POSTGRES_USER: learnium
       POSTGRES_PASSWORD: learnium
-      POSTGRES_DB: learnium
+      POSTGRES_DB: learnium          # LiteLLM uses this one
     ports:
       - '5432:5432'
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ./pg-init:/docker-entrypoint-initdb.d  # creates learnium_app on first boot
     healthcheck:
       test: ['CMD-SHELL', 'pg_isready -U learnium']
       interval: 5s

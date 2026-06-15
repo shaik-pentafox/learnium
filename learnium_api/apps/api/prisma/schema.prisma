@@ -1,0 +1,83 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ── Roles ─────────────────────────────────────────────────────────────────────
+
+model RoleDef {
+  id    Int    @id @default(autoincrement())
+  name  String @unique // SUPER_ADMIN | TRAINER | USER
+  users User[]
+
+  @@map("role_defs")
+}
+
+// ── Users ─────────────────────────────────────────────────────────────────────
+
+model User {
+  id           Int       @id @default(autoincrement())
+  employeeId   String    @unique
+  email        String    @unique
+  firstName    String
+  lastName     String
+  roleId       Int
+  role         RoleDef   @relation(fields: [roleId], references: [id])
+  supervisorId Int?
+  supervisor   User?     @relation("UserSupervisor", fields: [supervisorId], references: [id])
+  supervisees  User[]    @relation("UserSupervisor")
+  avatarUrl    String?
+  isDeleted    Boolean   @default(false)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  createdById  Int?
+  updatedById  Int?
+
+  credential      DefaultCredential?
+  refreshTokens   RefreshToken[]
+  realtimeTickets RealtimeTicket[]
+
+  @@map("users")
+}
+
+// ── Auth ──────────────────────────────────────────────────────────────────────
+
+model DefaultCredential {
+  id           Int    @id @default(autoincrement())
+  username     String @unique
+  passwordHash String
+  userId       Int    @unique
+  user         User   @relation(fields: [userId], references: [id])
+
+  @@map("default_credentials")
+}
+
+model RefreshToken {
+  id        String   @id @default(uuid())
+  userId    Int
+  user      User     @relation(fields: [userId], references: [id])
+  tokenHash String   @unique
+  familyId  String
+  isRevoked Boolean  @default(false)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([familyId])
+  @@map("refresh_tokens")
+}
+
+model RealtimeTicket {
+  id        String   @id @default(uuid())
+  userId    Int
+  user      User     @relation(fields: [userId], references: [id])
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@map("realtime_tickets")
+}
