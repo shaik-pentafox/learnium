@@ -59,17 +59,18 @@ Rebuild ALFA Learnium backend in **NestJS 11 + TypeScript**, client-agnostic, cl
            └───┬────────┬─────────┘   └────┬──────────────┬─────────┘
                │        │                  │              │
      ┌─────────▼──┐  ┌──▼────────────────▼──┐   ┌───────▼──────────────┐
-     │ PostgreSQL │  │  Redis 7              │   │  LiteLLM Gateway     │
-     │ 16 +       │  │  session registry,    │   │  (OSS, in-cluster)   │
+     │ PostgreSQL │  │  Redis 7              │   │  LLM (LangChain)    │
+     │ 16 +       │  │  session registry,    │   │  in-app, no gateway │
      │ PgBouncer  │  │  pub/sub, rate limits,│   │  OpenAI / Gemini /   │
      │ +pgvector  │  │  BullMQ queues,       │   │  Azure / OpenRouter / │
-     │ Prisma     │  │  WS ticket store      │   │  vLLM / Ollama       │
+     │ +LangGraph │  │  WS ticket store      │   │  vLLM / Ollama       │
+     │  checkpoint│  │                       │   │  (LangGraph engine)  │
      └─────┬──────┘  └───────────────────────┘   └──────────────────────┘
            │
      ┌─────▼──────────┐   ┌──────────────────┐   ┌────────────────────┐
      │ ClickHouse     │   │  alfa-worker     │   │  Observability     │
      │ analytics OLAP │   │  BullMQ procs,   │   │  OTel → Prometheus │
-     │ llm_logs/      │   │  16 job types,   │   │  Grafana, Loki,    │
+     │ llm_events/    │   │  10 job types,   │   │  Grafana, Loki,    │
      │ session/telemetry   │  7 queues        │   │  Tempo, Sentry OSS │
      └────────────────┘   └──────────────────┘   └────────────────────┘
            │
@@ -94,11 +95,13 @@ Rebuild ALFA Learnium backend in **NestJS 11 + TypeScript**, client-agnostic, cl
 | Language | TypeScript 5.x strict | `noUncheckedIndexedAccess`, ESM |
 | Package manager | npm workspaces | monorepo |
 | ORM / migrations | Prisma | `prisma migrate dev/deploy`; operational DB only |
-| Analytics DB | ClickHouse | `llm_logs`, session analytics, telemetry events; `@clickhouse/client` |
+| Analytics DB | ClickHouse | `llm_events`, `session_events`, `telemetry_events`; `@clickhouse/client` |
 | Validation | Zod via `nestjs-zod` | schemas in `packages/contracts`, shared with frontend |
 | Auth | JWT access (15 min) + rotating refresh | `@nestjs/passport`, `passport-jwt`, argon2 |
-| LLM access | OpenAI SDK → LiteLLM gateway | one client, all providers; DB registry |
-| Voice | `VoiceProvider` interface | Gemini Live + Azure VoiceLive + OpenAI Realtime |
+| LLM access | **LangChain.js** chat-model integrations | `@langchain/openai`, `@langchain/google-genai`, `@langchain/community`; models instantiated from DB registry + decrypted BYOK creds; `.withFallbacks()` for ordered fallback chains. **No LiteLLM gateway.** |
+| Roleplay orchestration | **LangGraph.js** (`@langchain/langgraph`) | `StateGraph` session engine (ports legacy `utils/new_chat.py`); **`PostgresSaver` checkpointer** (`@langchain/langgraph-checkpoint-postgres`) keyed by session uid → horizontal-scale-safe (replaces legacy in-memory `MemorySaver`) |
+| Voice | `VoiceProvider` interface | Gemini Live + Azure VoiceLive + OpenAI Realtime (vendor SDKs — outside LangChain) |
+| Local models (future) | OpenAI-compatible endpoints | vLLM / Ollama registered as providers (`baseUrl`, no key) → same `ChatOpenAI` client |
 | WebSockets | Nest gateways on raw `ws` | no socket.io; binary PCM16 + JSON control frames |
 | Cache / pub-sub | Redis 7 (`ioredis`) | session registry, rate limits, tickets, pub/sub |
 | Background jobs | BullMQ + `@nestjs/bullmq` | 16 job types, 7 queues |
@@ -139,7 +142,7 @@ alfa-learnium/
 │   └── tsconfig/                    # shared TS config bases
 ├── infra/
 │   ├── docker/                      # Dockerfile, docker-compose.yml
-│   │                                # (pg, redis, clickhouse, minio, litellm, api, worker)
+│   │                                # (pg, redis, clickhouse, minio, api, worker)
 │   ├── helm/                        # api / realtime / worker / gateway charts
 │   └── terraform/                   # cloud-agnostic modules
 ├── tools/migration/                 # ETL scripts: legacy Postgres → new schema
@@ -169,10 +172,14 @@ src/
 │   │                                #   insert(table, rows[]) + query<T>() helpers
 │   │                                #   used by analytics, llm cost, telemetry modules
 │   ├── storage/                     # StorageService interface + s3 / azure-blob adapters
+│   ├── crypto/                      # AES-256-GCM CryptoService for BYOK key encryption (E6)
 │   ├── llm/
-│   │   ├── llm-client.service.ts    # OpenAI SDK → LiteLLM (chat, stream, embeddings)
-│   │   ├── registry/                # provider/model registry service + admin sync
-│   │   ├── cost/                    # token accounting → llm_logs
+│   │   ├── model-factory.service.ts # builds LangChain chat models from registry + decrypted creds
+│   │   │                            #   (ChatOpenAI/AzureChatOpenAI/ChatGoogleGenerativeAI), .withFallbacks()
+│   │   ├── roleplay-graph.ts        # LangGraph StateGraph roleplay engine (ports legacy utils/new_chat.py)
+│   │   │                            #   compiled with PostgresSaver checkpointer (thread_id = session uid)
+│   │   ├── registry/                # provider/model/credential registry (BYOK vault)
+│   │   ├── cost/                    # LangChain usage-metadata callback → llm_events (ClickHouse)
 │   │   └── voice/                   # VoiceProvider interface + gemini-live / azure-voicelive impls
 │   ├── envelope/                    # response interceptor {status, message, data, meta}
 │   ├── errors/                      # typed domain errors → global exception filter → 4xx/5xx
@@ -180,18 +187,23 @@ src/
 │   └── telemetry/                   # request-activity interceptor → in-memory accumulator
 │                                    # (flushed by BullMQ job every 30s, never per-request DB writes)
 ├── modules/
-│   ├── identity/                    # users, roles, bulk import
-│   ├── personas/                    # roleplay persona CRUD, versioning, scoring config, voice styles
+│   ├── identity/                    # users, roles, bulk import, supervisor mapping
+│   │                                #   (SuperAdmin→Trainer→Trainee hierarchy)
+│   ├── personas/                    # persona CRUD, versioning, publish/unpublish, scoring config,
+│   │                                #   voice styles; trainer-owned, draft roleplay-test before publish
 │   ├── sessions/                    # session lifecycle, chat history, scoring, feedback
+│   │                                #   (roleplay turns run through core/llm LangGraph engine)
 │   ├── realtime/                    # loaded only when APP_ROLE=realtime
 │   │   ├── ticket.controller.ts     # POST /v1/realtime/ticket (one-time 30s WS ticket)
-│   │   ├── chat.gateway.ts          # text roleplay WS (streaming tokens, reconnect/resume)
+│   │   ├── chat.gateway.ts          # text roleplay WS (LangGraph .stream() tokens, reconnect/resume)
 │   │   ├── voice.gateway.ts         # voice WS (binary PCM16 + JSON control frames)
 │   │   └── session-registry.ts      # Redis-backed live-session state + resume
 │   ├── files/                       # simple file upload/download, pre-signed URL generation
+│   ├── dashboard/                   # admin / trainer / trainee reporting (perf + token-usage-by-
+│   │                                #   provider) — reads ClickHouse + Postgres rollups
 │   ├── analytics/                   # dashboards reading rollup tables; export BullMQ jobs
-│   ├── llmops/                      # provider/model registry admin API, usage/cost dashboard
-│   └── gamification/                # badges, streaks, leaderboard, performance scores
+│   ├── llmops/                      # provider/model + BYOK credential admin API, usage/cost dashboard
+│   └── gamification/                # (FUTURE — deferred) badges, streaks, leaderboard, perf scores
 ├── workers/                         # BullMQ processors (loaded only when APP_ROLE=worker)
 └── health/                          # GET /health (liveness), GET /ready (DB+Redis+gateway)
 ```
@@ -206,7 +218,7 @@ src/
 
 | Legacy | New |
 |---|---|
-| `mapped_customalfas` JSON array on users | FK column → `personaId` on users (direct assignment) |
+| `mapped_customalfas` JSON array on users | **Hierarchy model** (see below): `User.supervisorId` + `Persona.ownerId`/`isPublished` — no JSON array, no per-user persona FK |
 | `custom_alfa` table | `personas` (client-agnostic name) |
 | `custom_alfa_sessions` | `sessions` |
 | `custom_alfa_chat_history` | `chat_messages` |
@@ -215,6 +227,24 @@ src/
 | No partitioning | Monthly partitions on high-growth tables |
 | Soft delete: ad-hoc per query | Prisma client extension injects `isDeleted=false` filter everywhere |
 | Audit: PG trigger `log_audit()` | Prisma client extension reads CLS actor context → `audit_logs` |
+
+### Hierarchy & persona visibility (core model)
+
+Three-level hierarchy, supervisor self-reference only — **no groups/cohorts/domains, no public personas.**
+
+```
+SUPER_ADMIN ── creates ──▶ TRAINER ── creates ──▶ TRAINEE
+     │                        │                       ▲
+     │ creates trainees,      │ owns personas,        │ uses only the
+     │ maps them to a trainer │ tests drafts,         │ PUBLISHED personas
+     │ configs LLM providers  │ publishes them ───────┘ of their own trainer
+```
+
+- `User.supervisorId Int?` — trainee → trainer (the only org relationship). Super Admin sets it (or a trainer creating a trainee sets it to self).
+- `Persona.ownerId Int` — the trainer who created the persona.
+- `Persona.isPublished Boolean @default(false)` + `Persona.publishedVersion Int?` — a draft is editable + roleplay-testable **by its owner only**; publishing exposes the chosen version to that trainer's trainees.
+- **Visibility rule (no assignment table, no `isPublic`):** a trainee may use persona P iff `P.ownerId == trainee.supervisorId && P.isPublished`. A trainer sees/edits their own personas (any state). Super Admin sees all.
+- A trainer can own **many** personas and test each as a draft before publishing.
 
 ### High-growth tables (monthly partitions — Postgres)
 `sessions`, `chat_messages`, `audit_logs`
@@ -228,21 +258,20 @@ src/
 
 BullMQ workers batch-insert to ClickHouse via `@clickhouse/client`. Dashboard endpoints call `ClickHouseService.query<T>()` — never hit Postgres for analytics reads.
 
-### Gamification tables (new — Postgres via Prisma)
-| Table | Purpose |
-|---|---|
-| `badge_definitions` | Badge catalog (17 seeded); admin-configurable criteria JSON |
-| `user_badges` | Earned instances; `periodKey` for re-earnable (weekly/monthly) |
-| `user_streaks` | Current + longest streak, last activity date per user |
-| `user_performance_scores` | Composite 0-100 score per user/period (global leaderboard) |
+### Gamification tables — **FUTURE (deferred with the leaderboard)**
+
+`badge_definitions`, `user_badges`, `user_streaks`, `user_performance_scores` (composite score + leaderboard ranking) are **not built in the core phases**. Dashboards (below) compute their reporting aggregates directly from ClickHouse `session_events` + Postgres — they do **not** depend on these tables. Gamification + leaderboard land in a later enhancement phase.
+
+### Dashboard reads (core — no new tables)
+
+The dashboard module (admin / trainer / trainee) reads **ClickHouse** `session_events` + `llm_events` (token-usage-by-provider) and Postgres session/score rows directly — materialized rollup tables can be added later if read latency demands.
 
 ### Seed data (`prisma db seed` — not app boot)
 - `role_defs`: SUPER_ADMIN, TRAINER, USER
-- `badge_definitions`: 17 badges across 5 categories
 - `assistant_voices`, `voice_styles`
-- `llm_providers`, `llm_models` (placeholder rows; credentials via secret refs)
 - `external_apis`: LOGIN, USER_LOOKUP rows (URLs from env)
-- `default_credentials`: local-dev accounts (argon2-hashed, loaded from env)
+- `default_credentials`: local-dev SUPER_ADMIN account (argon2-hashed, from env) — first login configures everything else
+- **No `llm_*` seeds** — Super Admin adds providers/keys/models at runtime (BYOK). **No `badge_definitions`** — gamification deferred.
 
 ---
 
@@ -263,10 +292,11 @@ Global `JwtAuthGuard` = default-deny. `PUBLIC` = explicit `@Public()` decorator.
 
 | Method | Path | Auth | Notes |
 |---|---|---|---|
-| GET | `/users` | JWT `users:read` | Paginated; `?q=` search; filter by role |
-| GET | `/users/:id` | JWT `users:read` | Full profile |
-| POST | `/users` | JWT `users:write` | Create; 409 on duplicate employeeId |
-| PATCH | `/users/:id` | JWT `users:write` | Partial update |
+| GET | `/users` | JWT `users:read` | Paginated; `?q=` search; filter `?role=&supervisorId=`. Admin → all; Trainer → own trainees (supervisees) |
+| GET | `/users/:id` | JWT `users:read` | Full profile + supervisor + supervisees |
+| POST | `/users` | JWT `users:write` | Create; `{role, supervisorId?}`. **Admin** → create Trainer or Trainee (+ map Trainee to a Trainer). **Trainer** → create Trainee under self (`supervisorId` forced = self). 409 on duplicate employeeId |
+| PATCH | `/users/:id` | JWT `users:write` | Partial update (Trainer scoped to own trainees) |
+| POST | `/users/:id/supervisor` | JWT `users:write` ADMIN | `{supervisorId}` — (re)map a trainee to a trainer |
 | DELETE | `/users/:id` | JWT `users:delete` | Soft-delete |
 | POST | `/users/import` | JWT `users:write` | Multipart XLSX/CSV → BullMQ → returns ImportReport.id |
 | GET | `/users/import/:reportId` | JWT `users:write` | Import job status + error file URL |
@@ -281,15 +311,18 @@ Global `JwtAuthGuard` = default-deny. `PUBLIC` = explicit `@Public()` decorator.
 
 | Method | Path | Auth | Notes |
 |---|---|---|---|
-| GET | `/personas` | JWT `personas:read` | Paginated |
-| GET | `/personas/:id` | JWT `personas:read` | With score criteria + model config |
-| POST | `/personas` | JWT `personas:write` | |
-| PATCH | `/personas/:id` | JWT `personas:write` | Auto-snapshots version row on every edit |
-| DELETE | `/personas/:id` | JWT `personas:delete` | Soft-delete |
+| GET | `/personas` | JWT `personas:read` | Paginated. Admin → all; Trainer → own (any state); Trainee → published personas of own trainer only |
+| GET | `/personas/:id` | JWT `personas:read` | With score criteria + model config (visibility-checked per hierarchy) |
+| POST | `/personas` | JWT `personas:write` | Trainer creates; `ownerId` = current trainer; starts as draft (`isPublished=false`) |
+| PATCH | `/personas/:id` | JWT `personas:write` | Owner only; auto-snapshots version row on every edit |
+| DELETE | `/personas/:id` | JWT `personas:delete` | Owner/Admin; soft-delete |
 | GET | `/personas/:id/versions` | JWT `personas:read` | Version history list |
 | GET | `/personas/:id/versions/:v` | JWT `personas:read` | Snapshot detail |
 | POST | `/personas/:id/enhance` | JWT `personas:write` | Stream LLM-enhanced instructions (SSE) |
-| GET | `/personas/my` | JWT own | Personas accessible to current user |
+| POST | `/personas/:id/publish` | JWT `personas:write` | Owner only; set `isPublished=true`, `publishedVersion` = current → visible to trainer's trainees |
+| POST | `/personas/:id/unpublish` | JWT `personas:write` | Owner only; hide from trainees again |
+| POST | `/personas/:id/test` | JWT `personas:write` | Owner only; start a roleplay-test session against a **draft** (not counted as a trainee session) |
+| GET | `/personas/my` | JWT own | Trainee: published personas of own trainer they can roleplay |
 
 ### Sessions (`/api/v1/sessions`)
 
@@ -341,20 +374,19 @@ All JWT + `analytics:read`. Reads from BullMQ-materialized rollup tables (never 
 
 All accept `?personaId=&version=&from=&to=`.
 
-### Gamification
+### Dashboards (`/api/v1/dashboard`) — CORE reporting
 
-| Method | Path | Auth | Notes |
+Role-scoped reporting. Reads ClickHouse (`session_events`, `llm_events`) + Postgres; no live multi-CTE scans.
+
+| Method | Path | Auth | Returns |
 |---|---|---|---|
-| GET | `/leaderboard` | JWT | Global leaderboard; `?period=weekly\|monthly\|alltime`; own row pinned if outside top 50 |
-| GET | `/leaderboard/me` | JWT | Own scores across all periods + component breakdown |
-| GET | `/badges` | JWT | Full catalog with earned/locked state for current user |
-| GET | `/badges/me` | JWT | Only earned badges; sorted by earnedAt desc |
-| GET | `/badges/me/unseen` | JWT | Unread badge notifications |
-| PATCH | `/badges/me/seen` | JWT | Mark all unseen as seen |
-| GET | `/badges/users/:userId` | JWT own or `analytics:read` | Another user's earned badges |
-| GET | `/badges/definitions` | JWT ADMIN | Admin catalog view |
-| POST | `/badges/definitions` | JWT ADMIN | Create custom badge |
-| PATCH | `/badges/definitions/:id` | JWT ADMIN | Edit badge |
+| GET | `/dashboard/admin` | JWT SUPER_ADMIN | Org-wide: total training activity, trainee performance distribution, completion rates, **token usage + cost by provider/model**, per-trainer rollups, active users |
+| GET | `/dashboard/trainer` | JWT TRAINER | Own trainees: per-trainee avg score, completion rate, sessions + practice time, activity, at-risk list (low completion / declining) |
+| GET | `/dashboard/me` | JWT (own) | Trainee: own sessions, avg score per criterion, progress over time, practice time, last sessions with feedback |
+
+All accept `?from=&to=&personaId=`. Admin token-usage panel groups `llm_events` by `provider`/`model`.
+
+> **Gamification + leaderboard (badges, streaks, performance-score ranking) → future enhancement** (deferred out of core). Endpoints `/leaderboard*`, `/badges*` land in a later phase; dashboards above cover the core reporting need without them.
 
 ### Announcements (`/api/v1/announcements`)
 
@@ -365,7 +397,7 @@ CRUD; authenticated.
 | Method | Path | Notes |
 |---|---|---|
 | GET | `/health` | Liveness — always 200 |
-| GET | `/ready` | Readiness — checks DB + Redis + LiteLLM gateway |
+| GET | `/ready` | Readiness — checks DB + Redis + ClickHouse |
 
 ### WebSocket Gateways
 
@@ -430,33 +462,54 @@ Typed in `packages/contracts/realtime.ts`.
 
 ---
 
-## 9. LLM Platform Layer
+## 9. LLM Platform Layer — LangChain + LangGraph (in-app, no gateway)
 
-### LiteLLM gateway (OSS, in-cluster)
+> **Core swap: LiteLLM gateway removed.** Provider access and roleplay orchestration live in the app via LangChain.js / LangGraph.js, mirroring the legacy FastAPI engine (`utils/new_chat.py` + `utils/llm_provider.py`) which already runs LangGraph + LangChain — now with a **persistent checkpointer** so it scales horizontally (the legacy used in-process `MemorySaver`).
+>
+> **Stack note:** LangGraph's reference implementation is Python; the legacy engine is Python. This plan uses **LangGraph.js in NestJS** for a single TS codebase. Fallback if JS features lag: run the roleplay/LLM engine as a small Python LangGraph service behind the WS gateway (the `realtime` run target is already a separate deployment). Decision: LangGraph.js unless a concrete gap forces the split.
 
-- App speaks one OpenAI chat-completions format to the gateway
-- Gateway holds provider credentials; routes by model name
-- Built-in: load balancing, fallbacks, retries, per-key budgets, spend logging
-- Providers supported out of box: OpenAI, Gemini, Azure OpenAI, OpenRouter, Anthropic, Vertex, vLLM, Ollama, Together, Groq
+### Model access — `ModelFactoryService` (`core/llm/model-factory.service.ts`)
 
-### `LlmClientService` (`core/llm/llm-client.service.ts`)
+- Resolves a persona's **logical role** (`conversationModelId`, `scoringModelId`) → `llm_models` row → `llm_providers` + `llm_credentials` → a **LangChain chat-model instance**:
+  - `ChatOpenAI` — OpenAI, OpenRouter, and any OpenAI-compatible **local** endpoint (vLLM / Ollama) via `configuration.baseURL`
+  - `AzureChatOpenAI` — Azure OpenAI
+  - `ChatGoogleGenerativeAI` — Gemini
+- API key decrypted in-memory from `llm_credentials` (E6), passed to the constructor; never logged.
+- **Fallbacks:** `primary.withFallbacks([fallbackA, fallbackB])` — ordered per logical role (replaces the gateway's fallback feature; legacy already used `with_fallbacks`).
+- **Streaming:** `model.stream()` for chat turns. **Structured output:** `model.withStructuredOutput(zodSchema)` for scoring/feedback (per criterion or batched).
+- **Usage + cost:** LangChain `usage_metadata` callback → in-memory accumulator → `flush-llm-events` job → ClickHouse `llm_events` (tokens, model, **provider**, cost, latency).
+- No hardcoded model strings anywhere — model identity is always registry-resolved.
 
-- Thin wrapper over `openai` SDK pointed at gateway
-- Streaming for chat turns; non-streaming for scoring/feedback
-- Timeout + abort handling
-- Token usage extracted from every response → `create_llm_log`
+### Roleplay orchestration — `roleplay-graph.ts` (`core/llm/roleplay-graph.ts`)
 
-### Provider/model registry (DB, admin-configurable)
+- **LangGraph `StateGraph`** (ports legacy `utils/new_chat.py`): state = `messages` (with the `add_messages` reducer) + persona/session metadata; nodes: build-system-prompt (from persona `customInstructions` — **no hardcoded client names**) → model call (streamed) → persist turn to `chat_messages`.
+- `[CONVERSATION_ENDED]` sentinel ends the session server-side (legacy behavior retained).
+- **Checkpointer = `PostgresSaver`** (`@langchain/langgraph-checkpoint-postgres`), `thread_id = session.uid`. **Fixes the legacy `MemorySaver` flaw** (in-process state, no horizontal scale): any `realtime` pod resumes from Postgres; reconnect replays from the checkpoint + `chat_messages`.
+- Redis session registry (`session:{uid}`) holds liveness/routing only; durable conversation state is the Postgres checkpoint.
+
+### Provider / model / credential registry (DB, admin-configurable — BYOK)
+
+**Super Admin configures providers + keys once**; all trainers and trainees consume them transparently — **no per-user keys.**
 
 | Table | Key columns |
 |---|---|
-| `llm_providers` | type, baseUrl, credentialRef (secret name — never the key), isEnabled, priority, monthlyBudgetUsd |
-| `llm_models` | name, providerId, capabilities[], contextWindowTokens, inputPricePerMillion, outputPricePerMillion, isDefault |
+| `llm_providers` | `type` (`openai` / `azure_openai` / `gemini` / `openrouter` / **`local`** / `custom`), `baseUrl` (set for Azure + local vLLM/Ollama), `isEnabled`, `priority`, `monthlyBudgetUsd` — **no credential column** |
+| `llm_credentials` | many keys per provider; `{encryptedKey, iv, authTag, keyVersion}` (AES-256-GCM via `core/crypto`), `rpm`/`tpm`, `isActive`, `healthStatus`. **Write-only API**, masked reads (`sk-...x7Qp`); decrypted only inside `ModelFactoryService`. `local` providers need no key |
+| `llm_models` | `name` (slug: `gpt-4o`, `gemini-2.5-flash`, or a local model id), `providerId`, `capabilities[]`, `contextWindowTokens`, prices, `isDefault` |
 
-- Personas reference models by **logical role** (`conversationModelId`, `scoringModelId`) resolved at session start — no hardcoded model strings anywhere in code
-- `POST /llm/models/:id/promote` → requires offline prompt-regression suite to pass → `sync-llm-registry` BullMQ job pushes updated config to gateway
+- Personas reference models by **logical role** resolved at session start — never a hardcoded string.
+- `POST /llm/models/:id/promote` → requires offline prompt-regression suite to pass → flips the default; `ModelFactoryService` simply reads the new default (no gateway to sync).
+- **Future — local/self-hosted:** register a `local` provider with the vLLM/Ollama `baseUrl`; its models use `ChatOpenAI` with that base URL and no key. Switching to self-hosted = insert provider + model rows, flip defaults, **zero code change**.
 
-### `VoiceProvider` interface (`core/llm/voice/`)
+### Voice (DEFERRED — text-only is the current focus)
+
+Two approaches are on the table; **the backend must not preclude either.** Build neither now.
+
+**Approach A — client-side STT/TTS (preferred for simplicity).**
+Browser does speech→text (STT) and text→speech (TTS) locally; sends/receives **text** over the **existing chat WS**. The backend stays **text-only** — no audio, no `VoiceProvider`, no binary frames. "Voice" is just the same LangGraph text turn with a mic/speaker UI on the frontend. Zero extra backend surface. This rides the F6 chat path as-is.
+
+**Approach B — server-side realtime voice.**
+Browser streams PCM16; backend runs a realtime provider behind a `VoiceProvider` interface:
 
 ```typescript
 interface VoiceProvider {
@@ -467,13 +520,13 @@ interface VoiceProvider {
   end(): Promise<void>;
 }
 ```
+Implementations: `GeminiLiveProvider`, `AzureVoiceLiveProvider`, `OpenAIRealtimeProvider` (vendor SDKs — outside LangChain), or a future OSS pipeline (LiveKit + open STT/TTS). Selected per persona / `?provider=` param. This is the only approach that adds a backend voice gateway + binary protocol.
 
-Implementations: `GeminiLiveProvider`, `AzureVoiceLiveProvider`, `OpenAIRealtimeProvider`.
-Selected per persona config or per-request `?provider=` param via registry.
+**Design rule so both stay open:** the session/scoring path is transport-agnostic — it consumes a **text transcript**, never raw audio. Approach A feeds transcripts directly; Approach B's gateway transcribes to text before it touches the session. Whichever ships, scoring/analytics/checkpointing are unchanged.
 
 ---
 
-## 10. Background Jobs (BullMQ — 14 Job Types, 6 Queues)
+## 10. Background Jobs (BullMQ — 10 Job Types, 6 Queues)
 
 | Queue | Job | Trigger | Notes |
 |---|---|---|---|
@@ -485,16 +538,29 @@ Selected per persona config or per-request `?provider=` param via registry.
 | `analytics` | `flush-llm-events` | cron every 30s | Drain in-memory LLM call accumulator → batch-insert `llm_events` → ClickHouse |
 | `analytics` | `flush-telemetry` | cron every 30s | Drain in-memory activity accumulator → batch-insert `telemetry_events` → ClickHouse |
 | `retention` | `purge-old-partitions` | cron monthly | Drop Postgres partitions + ClickHouse TTL partition cleanup; archive to storage |
-| `registry` | `sync-llm-registry` | on provider/model change | Push updated config to LiteLLM gateway admin API |
+| `registry` | `refresh-model-cache` | on provider/model/credential change | Bust `ModelFactoryService` model cache across pods (Redis pub/sub); next turn rebuilds from DB — no gateway to sync |
 | `cleanup` | `expire-realtime-tickets` | cron every 5 min | Delete expired `realtime_tickets` rows (Postgres) |
-| `gamification` | `compute-performance-scores` | session end + cron 03:00 UTC | Query ClickHouse `session_events` → recalculate `user_performance_scores` (Postgres) + global rank + percentile |
-| `gamification` | `award-badges` | after `compute-performance-scores` | Evaluate `badge_definitions.criteria` against user stats; insert new `user_badges` |
-| `gamification` | `update-streaks` | session end | Increment `user_streaks.currentStreak` or reset if gap > 1 day |
-| `gamification` | `weekly-ranking-badges` | cron Monday 04:00 UTC | Global percentiles for closed week; award RANKING badges |
+
+> **Gamification jobs deferred:** `compute-performance-scores`, `award-badges`, `update-streaks`, `weekly-ranking-badges` ship with the future gamification/leaderboard phase. Core dashboards aggregate from `session_events`/`llm_events` on read (or via simple rollups added later if needed).
 
 ---
 
-## 11. Gamification System
+## 11. Dashboards (core) + Gamification (future)
+
+### Dashboards — core reporting (built in Phase 4)
+
+Three role-scoped dashboards (`/dashboard/admin|trainer|me`, §7), reading ClickHouse + Postgres:
+- **Super Admin:** org-wide training activity, trainee performance distribution, completion, **token usage + cost by provider/model**, per-trainer rollups.
+- **Trainer:** their trainees' scores, completion, activity, at-risk list.
+- **Trainee:** own sessions, per-criterion scores, progress over time, practice time.
+
+No gamification tables required — aggregates come straight from `session_events` / `llm_events`.
+
+---
+
+### Gamification & Leaderboard — **FUTURE (deferred)**
+
+> The full spec below (performance score, 17 badges, leaderboard) is retained for the later gamification phase. **Not built in core.** When built, it adds `badge_definitions`/`user_badges`/`user_streaks`/`user_performance_scores`, the 4 gamification jobs (§10), and `/leaderboard*`+`/badges*` endpoints. Leaderboard is **global** (no group/cohort).
 
 ### Performance Score (composite, 0–100)
 
@@ -568,23 +634,23 @@ Three roles: `SUPER_ADMIN`, `TRAINER`, `USER`.
 
 | Permission | SUPER_ADMIN | TRAINER | USER |
 |---|---|---|---|
-| `users:read` | all | all | — |
-| `users:write` | ✓ | — | — |
+| `users:read` | all | supervisees | — |
+| `users:write` | all (create Trainer/Trainee + map) | own trainees (create/edit) | — |
 | `users:delete` | ✓ | — | — |
-| `personas:read` | ✓ | ✓ | ✓ |
-| `personas:write` | ✓ | ✓ | — |
-| `personas:delete` | ✓ | — | — |
-| `sessions:read` | all | all | own |
-| `sessions:write` | ✓ | ✓ | ✓ |
+| `personas:read` | all | own (any state) | published, own trainer only |
+| `personas:write` | ✓ | own (create/edit/publish/test) | — |
+| `personas:delete` | ✓ | own | — |
+| `sessions:read` | all | supervisees | own |
+| `sessions:write` | ✓ | ✓ (incl. draft test) | ✓ |
 | `files:delete` | ✓ | — | — |
-| `analytics:read` | global | ✓ | own |
-| `leaderboard:read` | global | global | global |
-| `badges:read` | any user | any user | own |
-| `badges:write` | ✓ | — | — |
+| `dashboard:read` | org-wide | supervisees | own |
+| `analytics:read` | global | supervisees | own |
 | `llmops:read` | ✓ | — | — |
-| `llmops:write` | ✓ | — | — |
+| `llmops:write` (incl. BYOK credentials) | ✓ | — | — |
 
-Object-level checks (own-data access for dashboards/history) enforced in services, not just guards.
+Object-level checks enforced in **services**, not just guards: trainer scope = `supervisorId = trainer.id` (users/sessions/dashboard); persona visibility = owner (trainer) or `isPublished && ownerId = trainee.supervisorId` (trainee). `llmops:write` governs the encrypted BYOK credential endpoints; keys are write-only/masked regardless of role.
+
+> `leaderboard:read` / `badges:*` permissions arrive with the deferred gamification phase.
 
 ---
 
@@ -618,13 +684,13 @@ No other changes to the Python codebase.
 
 - Monorepo: npm workspaces + turbo, `apps/api`, `packages/contracts` (Zod envelope + pagination + error codes + WS protocol types)
 - NestJS 11 skeleton on Fastify; Zod-validated config module (fail-fast on missing env vars)
-- `docker-compose.yml`: postgres, redis, clickhouse, minio, litellm, api, worker services
+- `docker-compose.yml`: postgres, redis, clickhouse, minio, api, worker services (no LiteLLM — LangChain runs in-app)
 - Prisma init + baseline schema draft (all models from §6); ClickHouse DDL migration script for `llm_events`, `session_events`, `telemetry_events`
-- `ClickHouseService` wired into `core/clickhouse/`; `/ready` probe checks ClickHouse + DB + Redis + LiteLLM
+- `ClickHouseService` wired into `core/clickhouse/`; `core/crypto` (AES-256-GCM + `MASTER_ENCRYPTION_KEY`); `/ready` probe checks DB + Redis + ClickHouse
 - CI skeleton: lint → typecheck → unit test gate
 - pino logging + request-id correlation
 - Global envelope interceptor + exception filter (typed domain errors → proper 4xx/5xx)
-- `GET /health` + `GET /ready` (DB + Redis + ClickHouse + LiteLLM probes)
+- `GET /health` + `GET /ready` (DB + Redis + ClickHouse probes)
 
 **Exit gate:** `docker compose up --build` → all services start including ClickHouse; `/ready` 200 with all 4 probes ok; CI green
 
@@ -657,28 +723,26 @@ No other changes to the Python codebase.
 
 ---
 
-### Phase 3 — LLM Registry & Realtime (Weeks 6–8)
+### Phase 3 — LLM Registry & Realtime Text Chat (Weeks 6–8)
 
-- Prisma migrations: `llm_providers`, `llm_models`
-- LLM ops admin API + `sync-llm-registry` BullMQ job (pushes config changes to LiteLLM gateway admin API)
-- Logical-role model resolution at session start (never hardcoded strings)
+- Prisma migrations: `llm_providers`, `llm_models`, `llm_credentials`
+- LLM ops admin API + **BYOK credential vault** (encrypted, write-only/masked) + `refresh-model-cache` (Redis pub/sub busts `ModelFactoryService` cache on change — no gateway)
+- `ModelFactoryService`: logical-role → registry → decrypted cred → LangChain chat model; `.withFallbacks()`
 - `POST /auth/realtime/ticket` — one-time 30s WS ticket stored in Redis
-- Chat gateway (`/realtime/chat`):
-  - Streaming roleplay via `LlmClientService`
-  - Session state in Redis registry (`session:{id}` key with TTL)
-  - Reconnect/resume: replay missed `message_done` from Postgres on `resume` message
+- **Chat gateway (`/realtime/chat`) — the core deliverable:**
+  - **LangGraph `StateGraph` roleplay engine** (`roleplay-graph.ts`, ports legacy `utils/new_chat.py`); streamed via `graph.stream()`
+  - **`PostgresSaver` checkpointer** (`thread_id = session.uid`) — durable, horizontal-scale-safe
+  - Session liveness/routing in Redis registry (`session:{uid}` TTL)
+  - Reconnect/resume: replay missed `message_done` from checkpoint + Postgres on `resume`
   - Graceful drain on SIGTERM: close new connections, send `reconnect` advisory, flush registry
-- Voice gateway (`/realtime/voice`):
-  - `GeminiLiveProvider` + `AzureVoiceLiveProvider` behind `VoiceProvider` interface
-  - Binary PCM16 frames + JSON control
-  - Backpressure: bounded queue per session; drop-oldest for audio frames; per-user concurrent-session cap in Redis
 - Prompt-regression fixture suite: runs against any model before `POST /llm/models/:id/promote`
+- **Voice: DEFERRED** (text-only focus). When built, two options (see §9): client-side STT/TTS over the same text WS (no backend change), or a server-side `/realtime/voice` gateway. Not in this phase.
 
-**Exit gate:** WS chat → 3 turns → disconnect → reconnect with `lastMessageId` → server replays missed turn → continues; `POST /llm/providers` (new provider) → `sync-llm-registry` job runs → gateway config updated; voice session 60s with barge-in
+**Exit gate:** WS chat → 3 turns → disconnect → reconnect with `lastMessageId` → server replays missed turn from the Postgres checkpoint → continues; `POST /llm/providers` + key → next turn uses it (cache refreshed), no restart; SIGTERM → clients get `reconnect`
 
 ---
 
-### Phase 4 — Files, Analytics, LLM Ops, Gamification (Weeks 9–10)
+### Phase 4 — Files, Analytics, Dashboards (Weeks 9–10)
 
 **Files:**
 - Simple upload/download via `StorageService` (S3 adapter); MIME + size validation; pre-signed URL generation
@@ -688,30 +752,27 @@ No other changes to the Python codebase.
 - ClickHouse tables: `llm_events`, `session_events`, `telemetry_events` (MergeTree engine, no migrations — DDL in migration script)
 - `flush-llm-events` + `flush-telemetry` BullMQ jobs (every 30s) → batch-insert to ClickHouse
 - `score-session` job inserts `session_events` row after scoring completes
-- Dashboard endpoints (`GET /analytics/*`, `GET /llm/usage`) call `ClickHouseService.query<T>()` — zero Postgres reads for analytics
+- Analytics + dashboard endpoints (`GET /analytics/*`, `GET /dashboard/*`, `GET /llm/usage`) call `ClickHouseService.query<T>()` — zero Postgres reads for analytics
 - Export jobs: ClickHouse query → exceljs stream → storage → pre-signed URL
 
 **Audit:**
 - Prisma client extension reads CLS actor context → `audit_logs` rows in Postgres (replaces PG trigger `log_audit()`)
 
-**Gamification:**
-- Prisma migrations: `badge_definitions`, `user_badges`, `user_streaks`, `user_performance_scores`
-- Seed 17 badges with criteria JSON
-- `compute-performance-scores` job: composite 0-100, global rank + percentile
-- `award-badges` job: evaluate each active `badge_definitions.criteria` against user stats; skip already-earned (or same-period for re-earnable)
-- `update-streaks` job: increment or reset `currentStreak`; update `longestStreak`
-- `weekly-ranking-badges` + `monthly-improvement-badges` cron jobs
-- Leaderboard endpoints (read `user_performance_scores`)
-- Badge endpoints (catalog, earned, unseen/seen)
+**Dashboards (core):**
+- `dashboard` module: `GET /dashboard/admin|trainer|me` — role-scoped reporting from ClickHouse `session_events`/`llm_events` + Postgres
+- Admin **token-usage-by-provider/model + cost** panel (group `llm_events`); trainer supervisee rollups; trainee own progress
+- Object-level scope enforced in service (supervisor mapping)
 
-**Exit gate:** upload file → `GET /files/:fileId` returns pre-signed URL; `GET /analytics/overview` returns data from ClickHouse (verify zero Postgres analytics reads); session end → `session_events` row in ClickHouse + `award-badges` job runs → badge row exists in `user_badges`; leaderboard returns ranked list with performance scores
+> **Gamification + leaderboard deferred** to a later phase (badges, streaks, performance-score ranking, `/leaderboard*`, `/badges*`).
+
+**Exit gate:** upload file → `GET /files/:fileId` returns pre-signed URL; `GET /dashboard/admin` returns token-usage-by-provider from ClickHouse (verify zero Postgres analytics reads); `GET /dashboard/trainer` scoped to own supervisees; `GET /dashboard/me` returns own progress; session end → `session_events` row in ClickHouse
 
 ---
 
 ### Phase 5 — Production Hardening & Cutover (Weeks 11–13)
 
 **Infrastructure:**
-- Helm charts: `api` (HPA on CPU), `realtime` (HPA on connection count), `worker` (HPA on queue depth), `gateway`
+- Helm charts: `api` (HPA on CPU), `realtime` (HPA on connection count), `worker` (HPA on queue depth) — no LiteLLM gateway chart (LangChain runs in-app)
 - PodDisruptionBudgets; preStop drain hook for `realtime` pods
 - Terraform/OpenTofu modules: cluster, postgres, redis, clickhouse, storage, DNS, secrets
 - PgBouncer in transaction mode
@@ -750,13 +811,14 @@ No other changes to the Python codebase.
 
 ### Phase 6 — Enhancements (Quarter 2)
 
+- **Gamification & Leaderboard** (deferred from core): `badge_definitions`/`user_badges`/`user_streaks`/`user_performance_scores`, the 4 gamification jobs, `/leaderboard*` + `/badges*` endpoints (global scope), 17 badges (§11)
+- **Voice** (deferred): pick an approach (§9) — client-side STT/TTS over the text WS (no backend change), or server-side `/realtime/voice` gateway (`GeminiLiveProvider`/`AzureVoiceLiveProvider`/`OpenAIRealtimeProvider`, or OSS LiveKit + open STT/TTS)
 - Generated OpenAPI client SDKs (CI-generated from Zod contracts in `packages/contracts`)
 - Notification system: session completed, badge earned + webhooks
 - Full-text search (`tsvector`) over personas
 - pgvector semantic search (no separate vector DB until proven necessary)
 - LMS/xAPI export for training-industry integrations
-- `OpenAIRealtimeProvider` as third `VoiceProvider` implementation
-- OSS voice pipeline (LiveKit + open STT/TTS) as optional `VoiceProvider`
+- E3–E5 (playground analytics isolation, semantic cache, context pruning) from ENHANCEMENT_PLAN
 
 ---
 
@@ -783,21 +845,22 @@ JWT_REFRESH_SECRET=             # min 64 chars, different from access
 JWT_REFRESH_TTL_SECONDS=604800  # 7 days
 WS_TICKET_TTL_SECONDS=30
 
-# ── LiteLLM gateway ───────────────────────────
-LITELLM_BASE_URL=http://litellm:4000
-LITELLM_API_KEY=                # master key for the gateway
+# ── LLM (LangChain / LangGraph — BYOK credential vault) ──
+MASTER_ENCRYPTION_KEY=          # base64 32 bytes — encrypts llm_credentials (E6); the ONLY LLM secret in env
+# Provider API keys are NOT in env — Super Admin enters them at runtime; stored encrypted in llm_credentials.
+# Local models (vLLM/Ollama): register a `local` provider with baseUrl in the DB; no env key needed.
 
 # ── Object storage ────────────────────────────
 STORAGE_PROVIDER=s3|azure
 # S3 / MinIO / GCS-interop
 S3_ENDPOINT=                    # blank = AWS default
-S3_BUCKET=alfa-content
+S3_BUCKET=alfa-storage
 S3_REGION=
 S3_ACCESS_KEY_ID=
 S3_SECRET_ACCESS_KEY=
 # Azure Blob (when STORAGE_PROVIDER=azure)
 AZURE_BLOB_CONNECTION_STRING=
-AZURE_BLOB_CONTAINER=alfa-content
+AZURE_BLOB_CONTAINER=alfa-storage
 
 # ── External auth (optional) ──────────────────
 CREDENTIAL_VERIFIER=local|external
@@ -817,11 +880,10 @@ THROTTLE_TTL_MS=60000
 THROTTLE_LIMIT=100              # global
 THROTTLE_LOGIN_LIMIT=5          # /auth/login strict bucket
 
-# ── Uploads ───────────────────────────────────
-UPLOAD_MAX_VIDEO_MB=500
-UPLOAD_MAX_DOC_MB=50
-UPLOAD_ALLOWED_VIDEO_MIME=video/mp4,video/webm,video/quicktime
-UPLOAD_ALLOWED_DOC_MIME=application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document
+# ── Uploads (avatars, bulk-import, generic /files) ──
+UPLOAD_MAX_FILE_MB=50
+UPLOAD_ALLOWED_AVATAR_MIME=image/png,image/jpeg,image/webp
+UPLOAD_ALLOWED_IMPORT_MIME=application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv
 
 # ── Worker ────────────────────────────────────
 WORKER_CONCURRENCY=5
@@ -841,7 +903,7 @@ SENTRY_DSN=                     # optional
 | Unit | Jest + SWC | services, guards, envelope/error mapping, registry resolution, token accounting, gamification score formula |
 | Integration | Jest + Supertest + Testcontainers (real Postgres + Redis + ClickHouse) | every endpoint: happy path, 401, 403, 409, validation, pagination edges; analytics endpoints verify ClickHouse reads |
 | WS / E2E | Jest + `ws` client | chat lifecycle, reconnect contract, voice control frames, end-session scoring |
-| LLM contract | mocked gateway (recorded fixtures) | streaming parse, fallback behavior, conversation-end handling |
+| LLM contract | mocked LangChain models (recorded fixtures) | streaming parse, `.withFallbacks()` behavior, `[CONVERSATION_ENDED]` handling, LangGraph checkpoint resume |
 | Prompt regression | promptfoo / fixture suite | model-promotion gate — required before `POST /llm/models/:id/promote` |
 | Load | k6 | WS concurrency (500 sessions), login burst, dashboard concurrency |
 
@@ -866,9 +928,9 @@ Required before deploying to any client. None of these should require code chang
 
 | Phase | Checks |
 |---|---|
-| **0** | `docker compose up --build` → all services healthy; `GET /health` 200; `GET /ready` 200 with db/redis/litellm ok; CI green |
+| **0** | `docker compose up --build` → all services healthy; `GET /health` 200; `GET /ready` 200 with db/redis/clickhouse ok; CI green |
 | **1** | Login → JWT; no-token request → 401; wrong-role request → 403; 1000-row XLSX import → ImportReport completed with error file for bad rows; refresh reuse → 401 + family revoked |
-| **2** | Create persona → PATCH → verify `persona_versions` row exists; start session → end session → `score_results` rows exist; `llm_logs` row with token counts present |
+| **2** | Create persona → PATCH → verify `persona_versions` row exists; start session → end session → `score_results` rows exist; `llm_events` row (ClickHouse) with token counts present |
 | **3** | WS chat → 3 turns → disconnect → reconnect with `lastMessageId` → missed turn replayed → session continues; `POST /llm/providers` → job runs → gateway config updated without restart |
 | **4** | Upload file → `GET /files/:fileId` returns pre-signed URL; `GET /analytics/overview` reads from rollup (no live scan); session end → badge job → row in `user_badges`; leaderboard ranked list with performance scores |
 | **5** | k6: 500 WS sessions 5 min sustained, p95 < 300ms API, voice < 800ms; SIGTERM on realtime pod → clients reconnect to other pod, session continues; pen-test zero criticals |
