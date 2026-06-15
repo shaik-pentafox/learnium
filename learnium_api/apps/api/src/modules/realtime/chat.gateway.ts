@@ -5,51 +5,33 @@ import {
   OnGatewayDisconnect,
 } from '@nestjs/websockets';
 import { Inject, Logger } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import { Server, WebSocket } from 'ws';
 import type { RawData } from 'ws';
 import type { IncomingMessage } from 'node:http';
-import OpenAI from 'openai';
 import type Redis from 'ioredis';
+import type OpenAI from 'openai';
 import { PrismaService } from '../../core/database/prisma.service';
 import { REDIS_CLIENT } from '../../core/redis/redis.module';
+import { LlmClientService } from '../../core/llm/llm-client.service';
+import { ScoringService } from '../../core/llm/scoring.service';
 import { SessionRegistry } from './session-registry';
-import type { Env } from '../../core/config/env.schema';
-
-interface ScoreCriterion {
-  id: number;
-  name: string;
-  description: string | null;
-  maxScore: number;
-}
-
-interface ScoringResponse {
-  scores: Array<{ criterionId: number; score: number; feedback: string }>;
-  overallFeedback: string;
-}
 
 @WebSocketGateway({ path: '/api/v1/realtime/chat' })
 export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
   @WebSocketServer() readonly server: Server;
 
   private readonly logger = new Logger(ChatGateway.name);
-  private readonly openai: OpenAI;
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly registry: SessionRegistry,
-    private readonly config: ConfigService<Env, true>,
+    private readonly llm: LlmClientService,
+    private readonly scoringService: ScoringService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
-  ) {
-    this.openai = new OpenAI({
-      baseURL: config.get('LITELLM_BASE_URL', { infer: true }),
-      apiKey: config.get('LITELLM_API_KEY', { infer: true }),
-    });
-  }
+  ) {}
 
   async handleConnection(client: WebSocket, req: IncomingMessage): Promise<void> {
-    const rawUrl = req.url ?? '/';
-    const url = new URL(rawUrl, 'http://localhost');
+    const url = new URL(req.url ?? '/', 'http://localhost');
     const ticket = url.searchParams.get('ticket');
     const sessionUid = url.searchParams.get('sessionId');
 
@@ -68,14 +50,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     const session = await this.prisma.session.findUnique({
       where: { uid: sessionUid },
       include: {
-        persona: {
-          select: {
-            id: true,
-            name: true,
-            systemPrompt: true,
-            scoreCriteria: { orderBy: { order: 'asc' } },
-          },
-        },
+        persona: { select: { id: true, name: true, systemPrompt: true } },
       },
     });
 
@@ -174,17 +149,10 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
     let fullContent = '';
     try {
-      const stream = await this.openai.chat.completions.create({
-        model: 'gpt-4o-mini',
-        messages,
-        stream: true,
-      });
-
-      for await (const chunk of stream) {
-        const delta = chunk.choices[0]?.delta?.content ?? '';
-        if (delta) {
-          fullContent += delta;
-          this.send(client, { type: 'token', delta });
+      for await (const chunk of this.llm.stream(messages)) {
+        if (!chunk.done) {
+          fullContent += chunk.delta;
+          this.send(client, { type: 'token', delta: chunk.delta });
         }
       }
     } catch (err) {
@@ -225,99 +193,9 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       data: { status: 'COMPLETED', endedAt: new Date() },
     });
 
-    const session = await this.prisma.session.findUnique({
-      where: { uid: wsClient.sessionUid },
-      include: {
-        messages: { orderBy: { createdAt: 'asc' } },
-        persona: { include: { scoreCriteria: { orderBy: { order: 'asc' } } } },
-      },
-    });
-
-    let scores: Array<{ criterionId: number; score: number | null; maxScore: number; feedback: string | null }> = [];
-    let feedback: string | null = null;
-
-    if (session) {
-      const result = await this.runScoring(wsClient.sessionDbId, session);
-      scores = result.scores;
-      feedback = result.feedback;
-    }
+    const { scores, feedback } = await this.scoringService.scoreSession(wsClient.sessionDbId);
 
     this.send(client, { type: 'session_ended', scores, feedback });
-  }
-
-  private async runScoring(
-    sessionId: number,
-    session: {
-      messages: Array<{ role: string; content: string }>;
-      persona: { scoreCriteria: ScoreCriterion[] };
-    },
-  ): Promise<{
-    scores: Array<{ criterionId: number; score: number | null; maxScore: number; feedback: string | null }>;
-    feedback: string | null;
-  }> {
-    const criteria = session.persona.scoreCriteria;
-    if (criteria.length === 0) return { scores: [], feedback: null };
-
-    let scoringResult: ScoringResponse | null = null;
-
-    try {
-      const transcript = session.messages
-        .map((m) => `${m.role.toUpperCase()}: ${m.content}`)
-        .join('\n');
-
-      const criteriaText = criteria
-        .map((c, i) => `${i + 1}. ${c.name} (max ${c.maxScore}): ${c.description ?? ''}`)
-        .join('\n');
-
-      const prompt = `You are a training evaluator. Score the trainee based on the chat transcript and rubric.
-
-TRANSCRIPT:
-${transcript || '(no messages recorded)'}
-
-SCORING RUBRIC:
-${criteriaText}
-
-Return ONLY valid JSON in this exact format:
-{
-  "scores": [
-    {"criterionId": <id>, "score": <0-max>, "feedback": "<one sentence>"}
-  ],
-  "overallFeedback": "<2-3 sentence summary>"
-}`;
-
-      const resp = await this.openai.chat.completions.create({
-        model: 'gpt-4o-mini',
-        messages: [{ role: 'user', content: prompt }],
-        response_format: { type: 'json_object' },
-      });
-
-      const raw = resp.choices[0]?.message?.content ?? '{}';
-      scoringResult = JSON.parse(raw) as ScoringResponse;
-    } catch (err) {
-      this.logger.error({ err }, 'Inline scoring error');
-    }
-
-    const scoreRows = criteria.map((c) => {
-      const match = scoringResult?.scores.find((s) => s.criterionId === c.id);
-      return {
-        criterionId: c.id,
-        score: match?.score ?? null,
-        maxScore: c.maxScore,
-        feedback: match?.feedback ?? (scoringResult ? null : 'Scoring unavailable — LLM unreachable'),
-      };
-    });
-
-    await this.prisma.$transaction([
-      this.prisma.scoreResult.createMany({
-        data: scoreRows.map((r) => ({ ...r, sessionId })),
-      }),
-      this.prisma.session.update({
-        where: { id: sessionId },
-        data: { feedback: scoringResult?.overallFeedback ?? null },
-      }),
-    ]);
-
-    return { scores: scoreRows, feedback: scoringResult?.overallFeedback ?? null };
   }
 
   private async handleResume(
