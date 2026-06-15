@@ -27,10 +27,12 @@ model User {
   lastName     String
   roleId       Int
   role         RoleDef   @relation(fields: [roleId], references: [id])
-  supervisorId Int?
-  supervisor   User?     @relation("UserSupervisor", fields: [supervisorId], references: [id])
-  supervisees  User[]    @relation("UserSupervisor")
-  avatarUrl    String?
+  supervisorId     Int?
+  supervisor       User?    @relation("UserSupervisor", fields: [supervisorId], references: [id])
+  supervisees      User[]   @relation("UserSupervisor")
+  assignedPersonaId Int?
+  assignedPersona  Persona? @relation("AssignedPersona", fields: [assignedPersonaId], references: [id])
+  avatarUrl        String?
   isDeleted    Boolean   @default(false)
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
@@ -80,6 +82,68 @@ model RealtimeTicket {
 
   @@index([userId])
   @@map("realtime_tickets")
+}
+
+// ── Personas ──────────────────────────────────────────────────────────────────
+
+model VoiceStyle {
+  id       Int       @id @default(autoincrement())
+  name     String    @unique
+  provider String    // elevenlabs | azure | google
+  voiceId  String
+  personas Persona[]
+
+  @@map("voice_styles")
+}
+
+model Persona {
+  id                 Int              @id @default(autoincrement())
+  name               String
+  description        String?
+  systemPrompt       String
+  customInstructions String?
+  voiceStyleId       Int?
+  voiceStyle         VoiceStyle?      @relation(fields: [voiceStyleId], references: [id])
+  isDeleted          Boolean          @default(false)
+  createdById        Int?
+  updatedById        Int?
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+  versions           PersonaVersion[]
+  scoreCriteria      ScoreCriterion[]
+  assignedUsers      User[]           @relation("AssignedPersona")
+
+  @@map("personas")
+}
+
+model PersonaVersion {
+  id                 Int      @id @default(autoincrement())
+  personaId          Int
+  persona            Persona  @relation(fields: [personaId], references: [id])
+  version            Int
+  systemPrompt       String
+  customInstructions String?
+  snapshotData       Json
+  createdById        Int?
+  createdAt          DateTime @default(now())
+
+  @@unique([personaId, version])
+  @@index([personaId])
+  @@map("persona_versions")
+}
+
+model ScoreCriterion {
+  id          Int     @id @default(autoincrement())
+  personaId   Int
+  persona     Persona @relation(fields: [personaId], references: [id])
+  name        String
+  description String?
+  maxScore    Int     @default(10)
+  weight      Float   @default(1.0)
+  order       Int     @default(0)
+
+  @@index([personaId])
+  @@map("score_criteria")
 }
 
 // ── Bulk Import ───────────────────────────────────────────────────────────────
