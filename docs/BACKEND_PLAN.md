@@ -87,18 +87,21 @@ apps/api/src/
 │   ├── storage/                      # StorageService iface + s3 / azure-blob adapters
 │   ├── llm/                          # see §4
 │   │   ├── llm-client.service.ts     # OpenAI SDK → LiteLLM gateway (chat, stream, embeddings)
-│   │   ├── registry/                 # provider/model registry service + admin sync
+│   │   ├── registry/                 # provider/model/credential registry + encrypted key
+│   │   │                             #   vault + gateway reconciler (E6); semantic-cache flags (E4)
 │   │   ├── cost/                     # token accounting → llm_logs
 │   │   └── voice/                    # VoiceProvider iface + gemini-live / azure-voicelive impls
 │   ├── envelope/                     # response interceptor {status, message, data, meta}
 │   ├── errors/                       # typed domain errors + global exception filter → 4xx/5xx
 │   ├── pagination/                   # PageQuery pipe + paginated envelope helper
-│   └── telemetry/                    # request-activity interceptor → in-memory accumulator
-│                                     # (flushed by worker job, never per-request writes)
+│   ├── telemetry/                    # request-activity interceptor → in-memory accumulator
+│   │                                 # (flushed by worker job, never per-request writes)
+│   ├── crypto/                       # AES-256-GCM CryptoService for LLM key encryption (E6);
+│   │                                 #   MASTER_ENCRYPTION_KEY + keyVersion rotation
+│   └── events/                       # typed domain-event emitter → Redis Streams (E7)
 ├── modules/
-│   ├── identity/                     # users, roles, org groupings (job categories,
-│   │   │                             # business domains, training cohorts), supervisor mapping
-│   │   ├── identity.controller.ts    # /v1/users, /v1/roles, /v1/groups...
+│   ├── identity/                     # users, roles, supervisor mapping (no org groupings)
+│   │   ├── identity.controller.ts    # /v1/users, /v1/roles
 │   │   ├── identity.service.ts
 │   │   ├── identity.repository.ts
 │   │   └── import/                   # bulk XLSX/CSV import (enqueue → worker processes)
@@ -111,11 +114,12 @@ apps/api/src/
 │   │   ├── chat.gateway.ts           # text roleplay WS
 │   │   ├── voice.gateway.ts          # voice roleplay WS (binary PCM16)
 │   │   └── session-registry.ts       # Redis-backed live-session state + resume
-│   ├── content/                      # videos/docs library, reactions, archive/restore,
-│   │                                 # configurable UI buttons
-│   ├── analytics/                    # dashboards reading rollup tables; export jobs
-│   ├── llmops/                       # /v1/llm/providers, /v1/llm/models admin API,
-│   │                                 # usage/cost dashboard endpoints
+│   ├── dashboard/                    # trainee + trainer aggregate dashboards (E2),
+│   │                                 # reads rollup/gamification tables only
+│   ├── analytics/                    # dashboards reading rollup tables; export jobs;
+│   │                                 # event ingestion → analytics_events (E7)
+│   ├── llmops/                       # /v1/llm/providers, /v1/llm/models, /v1/llm/credentials
+│   │                                 # admin API; usage/cost dashboard endpoints
 │   └── notifications/                # (phase 4) events + webhooks
 ├── workers/                          # BullMQ processors: import, export, rollups,
 │                                     # retention purge, telemetry flush, registry sync
@@ -143,7 +147,7 @@ Module rules: controllers/gateways do transport only; services hold business log
 - WS auth: `POST /v1/realtime/ticket` returns a one-time short-lived ticket; gateways validate and consume it — no JWT in query strings.
 
 ### 3.3 Data layer
-- Prisma schema is a **clean redesign informed by the legacy schema** (~25 tables), fixing: missing FK constraints, JSON-array ID columns where join tables belong (group mappings, persona mappings → proper M:N tables), inconsistent audit columns, soft-delete drift.
+- Prisma schema is a **clean redesign informed by the legacy schema** (~25 tables), fixing: missing FK constraints, JSON-array ID columns where join tables belong (persona-assignment mappings → proper M:N tables), inconsistent audit columns, soft-delete drift.
 - Soft delete + audit columns (`createdBy/At`, `modifiedBy/At`) enforced via Prisma client extension reading request context (AsyncLocalStorage) — impossible to forget.
 - High-growth tables (chat history, llm_logs, audit_logs, telemetry) partitioned by month via raw SQL migrations; retention purge job archives to object storage.
 - Analytics: BullMQ rollup jobs materialize aggregates into summary tables; dashboard endpoints read rollups only. Heavy SQL lives in repositories as `$queryRaw` tagged templates (parameterized by construction).
@@ -197,29 +201,29 @@ Module rules: controllers/gateways do transport only; services hold business log
 ## 6. Delivery Phases
 
 ### Phase 0 — Scaffold & foundations (week 1)
-Monorepo (pnpm + turbo), `apps/api` NestJS skeleton on Fastify, `packages/contracts` with envelope/pagination/error types, Zod-validated config, docker-compose (postgres, redis, minio, litellm), Prisma init + baseline schema draft, CI skeleton (lint, typecheck, unit), pino logging + request IDs, health/ready endpoints, global envelope interceptor + exception filter.
+Monorepo (pnpm + turbo), `apps/api` NestJS skeleton on Fastify, `packages/contracts` with envelope/pagination/error types, Zod-validated config, docker-compose (postgres, redis-stack with vector search, minio, litellm), Prisma init + baseline schema draft, CI skeleton (lint, typecheck, unit), pino logging + request IDs, health/ready endpoints, global envelope interceptor + exception filter. `core/crypto` (AES-256-GCM + `MASTER_ENCRYPTION_KEY`) and `core/events` (Redis Streams plumbing) scaffolded (E6/E7).
 
 **Exit:** `docker compose up` runs the stack; CI green on an empty-but-wired app.
 
 ### Phase 1 — Identity & auth (weeks 2–3)
-Prisma schema for identity (users, roles, groupings, supervisor mapping) + first migrations + seeds. Login with `CredentialVerifier` (local + external), argon2, JWT access + refresh rotation, logout revocation. Global auth guard + `@Public()`, RBAC guard + permissions map, login throttling. Users/roles/groups CRUD with pagination/search, soft delete, audit columns via client extension. Bulk import job (BullMQ + exceljs streaming) with import report tracking. Integration tests throughout.
+Prisma schema for identity (users, roles, supervisor mapping — **E1 applied before the first migration: no groups/domains/cohorts ever built**) + first migrations + seeds. Login with `CredentialVerifier` (local + external), argon2, JWT access + refresh rotation, logout revocation. Global auth guard + `@Public()`, RBAC guard + permissions map, login throttling. Users/roles CRUD with pagination/search, soft delete, audit columns via client extension. Bulk import job (BullMQ + exceljs streaming) with import report tracking (import optionally sets `supervisorId` by employee id). Integration tests throughout.
 
 **Exit:** identity domain fully usable and tested; auth model final.
 
 ### Phase 2 — Personas & sessions (weeks 4–5)
-Persona CRUD with versioning (every edit snapshots a version row), scoring config, voice styles, prompt-enhancement endpoint (first `LlmClientService` consumer). Session lifecycle (start → history → end), scoring + feedback generation via gateway, `llm_logs` writing, session queries + Excel export job.
+Persona CRUD with versioning (every edit snapshots a version row), scoring config, voice styles, prompt-enhancement endpoint (first `LlmClientService` consumer); `isPublic` flag + `PersonaAssignment` for E1 scoping. Session lifecycle (start → history → end), scoring + feedback generation via gateway, `llm_logs` writing, session queries + Excel export job. `SessionSummary` table + context-assembly logic (E5; the pruning worker can land in Phase 3).
 
 **Exit:** complete roleplay loop works over REST (no WS yet) against any configured provider.
 
 ### Phase 3 — LLM registry & realtime (weeks 6–8)
-Provider/model registry tables + admin API + gateway sync (**OpenAI, Gemini, Azure OpenAI, OpenRouter configurable at runtime**); logical-role model resolution; fallback chains. Realtime run target: ticket auth, chat gateway (streaming roleplay), Redis session registry + reconnect contract, graceful drain. Voice gateway behind `VoiceProvider` with Gemini Live + Azure VoiceLive implementations; backpressure + session caps. Prompt-regression suite wired as registry promotion gate.
+Provider/model registry + **BYOK credential vault (E6 in full — replaces the v2 `credentialRef` design): `llm_credentials` encrypted at rest (AES-256-GCM), write-only/masked API, reconciler syncs decrypted state to the gateway Management API, `usage-based-routing-v2` across the key pool**; admin API + gateway sync (**OpenAI, Gemini, Azure OpenAI, OpenRouter configurable at runtime**); logical-role → alias model resolution; fallback chains. E4 semantic-cache config + `cacheHit` logging; E5 context-pruning worker; E3 simulation flag + playground WS usage frames. Realtime run target: ticket auth, chat gateway (streaming roleplay), Redis session registry + reconnect contract, graceful drain. Voice gateway behind `VoiceProvider` with Gemini Live + Azure VoiceLive implementations; backpressure + session caps. Prompt-regression suite wired as registry promotion gate.
 
 **Exit:** full text + voice roleplay over WS, horizontally scalable, provider-swappable via admin API.
 
-### Phase 4 — Content, analytics, llmops (weeks 9–10)
-Content library (upload via `StorageService`, validation: extension/MIME allowlist + size caps, group-scoped visibility, soft-delete/restore/archive, reactions, UI buttons). Analytics rollup jobs + dashboard endpoints (cohort/user/persona/version) + exports. LLM usage/cost dashboard from `llm_logs` reconciled with gateway spend. Telemetry interceptor + batch flush job. Audit logging (Prisma extension or DB triggers).
+### Phase 4 — Dashboard, analytics, llmops (weeks 9–10)
+Trainee + trainer dashboard module (E2) reading rollup/gamification tables only (one round trip). Analytics rollup jobs + dashboard endpoints (user/persona/version) + exports. **E7 Stage 1**: event spine (`core/events` → Redis Streams), ingestion worker → `analytics_events`, rollup/gamification jobs converted to `session.completed` consumers (write path decoupled from request latency). LLM usage/cost dashboard from `llm_logs` reconciled with gateway spend, plus separate playground-spend figure (E3). Telemetry interceptor + batch flush job. Audit logging (Prisma extension or DB triggers).
 
-**Exit:** feature parity with the legacy backend on `/api/v1`.
+**Exit:** parity with the legacy backend's retained feature set on `/api/v1`.
 
 ### Phase 5 — Production hardening & cutover (weeks 11–13)
 Helm charts (api/realtime/worker/gateway), Terraform modules, PgBouncer, External Secrets. OTel + Prometheus + Grafana + Loki + Sentry; SLO dashboards + alert rules. Load tests (k6) against SLOs (API p95 < 300 ms, WS first-token < 2 s, voice round-trip < 800 ms). Security review/pen test. **Data migration:** `tools/migration` ETL scripts (legacy Postgres → new schema, JSON-array mappings → join tables), rehearsed on staging snapshots. Parallel run: new API alongside legacy on migrated data, consumer switches, soak period, legacy retired.
@@ -227,7 +231,7 @@ Helm charts (api/realtime/worker/gateway), Terraform modules, PgBouncer, Externa
 **Exit:** production traffic on NestJS backend; legacy decommissioned.
 
 ### Phase 6 — Product enhancements (quarter 2)
-Generated client SDKs, notifications + webhooks, full-text + pgvector search, multi-tenancy groundwork (tenant scoping), LMS/xAPI export, optional OSS voice pipeline (LiveKit + open STT/TTS) as an additional `VoiceProvider`.
+Generated client SDKs, notifications + webhooks, full-text + pgvector search, multi-tenancy groundwork (tenant scoping — inherits E1's clean slate, no legacy groupings to unwind), LMS/xAPI export, **E7 Stage 2** evaluation against scale triggers (ingestion worker → TimescaleDB, then ClickHouse only if Timescale saturates), optional OSS voice pipeline (LiveKit + open STT/TTS) as an additional `VoiceProvider`.
 
 ---
 
@@ -242,7 +246,7 @@ Clean redesign — no client-specific column names, no JSON-array FK hacks, prop
 
 enum Role {
   SUPER_ADMIN   // full platform control
-  TRAINER       // persona config, content, group analytics
+  TRAINER       // persona config + assignment, supervisee analytics
   USER          // trainee — sessions, own scores, leaderboard
 }
 
@@ -272,11 +276,6 @@ enum ModelCapability {
   VOICE
   VISION
   EMBEDDINGS
-}
-
-enum ContentType {
-  VIDEO
-  DOCUMENT
 }
 
 enum ImportStatus {
@@ -329,8 +328,7 @@ model User {
   supervisor       User?     @relation("Supervision", fields: [supervisorId], references: [id])
   supervisees      User[]    @relation("Supervision")
   // relations
-  groups           UserGroup[]
-  cohorts          UserCohort[]
+  personaAssignments PersonaAssignment[]   // personas explicitly assigned to this trainee (E1)
   sessions         Session[]
   telemetry        UserTelemetry[]
   telemetryDaily   UserTelemetryDaily[]
@@ -354,81 +352,10 @@ model AssistantVoice {
   @@map("assistant_voices")
 }
 
-// Org groupings (was "jcs" / job categories — generic name)
-model Group {
-  id          Int          @id @default(autoincrement())
-  name        String       @unique
-  description String?
-  members     UserGroup[]
-  personas    PersonaGroup[]
-  content     ContentItem[]
-  cohorts     Cohort[]
-  sessions    Session[]
-  importReports ImportReport[]
-  createdBy   Int?
-  createdAt   DateTime     @default(now())
-  modifiedBy  Int?
-  updatedAt   DateTime     @updatedAt
-  @@map("groups")
-}
-
-model UserGroup {
-  userId    Int
-  groupId   Int
-  user      User  @relation(fields: [userId], references: [id], onDelete: Cascade)
-  group     Group @relation(fields: [groupId], references: [id], onDelete: Cascade)
-  assignedAt DateTime @default(now())
-  assignedBy Int?
-  @@id([userId, groupId])
-  @@map("user_groups")
-}
-
-model Domain {
-  id          Int       @id @default(autoincrement())
-  name        String    @unique
-  description String?
-  subDomains  SubDomain[]
-  createdBy   Int?
-  createdAt   DateTime  @default(now())
-  modifiedBy  Int?
-  updatedAt   DateTime  @updatedAt
-  @@map("domains")
-}
-
-model SubDomain {
-  id        Int     @id @default(autoincrement())
-  name      String
-  domainId  Int
-  domain    Domain  @relation(fields: [domainId], references: [id])
-  @@unique([name, domainId])
-  @@map("sub_domains")
-}
-
-// Training waves / cohorts (was "wave_masters")
-model Cohort {
-  id          Int          @id @default(autoincrement())
-  name        String       @unique
-  description String?
-  groupId     Int?
-  group       Group?       @relation(fields: [groupId], references: [id])
-  members     UserCohort[]
-  sessions    Session[]
-  createdBy   Int?
-  createdAt   DateTime     @default(now())
-  modifiedBy  Int?
-  updatedAt   DateTime     @updatedAt
-  @@map("cohorts")
-}
-
-model UserCohort {
-  userId   Int
-  cohortId Int
-  user     User   @relation(fields: [userId], references: [id], onDelete: Cascade)
-  cohort   Cohort @relation(fields: [cohortId], references: [id], onDelete: Cascade)
-  enrolledAt DateTime @default(now())
-  @@id([userId, cohortId])
-  @@map("user_cohorts")
-}
+// Org groupings (Group / UserGroup / Domain / SubDomain / Cohort / UserCohort) are
+// intentionally absent — removed by E1. The only organizational relationship is the
+// supervisor self-reference on User. Persona/visibility scoping uses isPublic +
+// PersonaAssignment (below) instead of group/cohort membership.
 
 // ─────────────────────────────────────────────
 // AUTH
@@ -495,10 +422,9 @@ model Persona {
   scoringModel           LlmModel?        @relation("ScoringModel", fields: [scoringModelId], references: [id])
   voiceStyleId           Int?
   voiceStyle             VoiceStyle?      @relation(fields: [voiceStyleId], references: [id])
-  domainId               Int?
-  domain                 Domain?          @relation(fields: [domainId], references: [id])
+  isPublic               Boolean          @default(true)   // public = visible to all trainees (E1)
   // relations
-  groups                 PersonaGroup[]
+  assignments            PersonaAssignment[]               // explicit per-trainee assignment (E1)
   versions               PersonaVersion[]
   scoreCriteria          ScoreCriterion[]
   sessions               Session[]
@@ -511,13 +437,17 @@ model Persona {
   @@map("personas")
 }
 
-model PersonaGroup {
-  personaId Int
-  groupId   Int
-  persona   Persona @relation(fields: [personaId], references: [id], onDelete: Cascade)
-  group     Group   @relation(fields: [groupId], references: [id], onDelete: Cascade)
-  @@id([personaId, groupId])
-  @@map("persona_groups")
+// E1 replacement for PersonaGroup: direct trainer→trainee persona assignment.
+// A persona is visible to a trainee if isPublic = true OR a row exists here.
+model PersonaAssignment {
+  personaId  Int
+  userId     Int
+  persona    Persona  @relation(fields: [personaId], references: [id], onDelete: Cascade)
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  assignedBy Int?
+  assignedAt DateTime @default(now())
+  @@id([personaId, userId])
+  @@map("persona_assignments")
 }
 
 // Snapshot of every persona state at the time of edit
@@ -565,10 +495,7 @@ model Session {
   personaId             Int
   persona               Persona       @relation(fields: [personaId], references: [id])
   personaVersion        Int
-  groupId               Int?
-  group                 Group?        @relation(fields: [groupId], references: [id])
-  cohortId              Int?
-  cohort                Cohort?       @relation(fields: [cohortId], references: [id])
+  isSimulation          Boolean       @default(false)   // E3 playground/test session — excluded from rollups, gamification, cost dashboards
   status                SessionStatus @default(IN_PROGRESS)
   startedAt             DateTime      @default(now())
   endedAt               DateTime?
@@ -579,12 +506,14 @@ model Session {
   messages              ChatMessage[]
   scores                ScoreResult[]
   llmLogs               LlmLog[]
+  summaries             SessionSummary[]               // E5 context-pruning overlays
   createdAt             DateTime      @default(now())
   updatedAt             DateTime      @updatedAt
   // partitioned by month on createdAt
   @@index([userId])
   @@index([personaId])
   @@index([createdAt])
+  // partial index for cheap simulation purging: ON sessions (createdAt) WHERE is_simulation = true (E3)
   @@map("sessions")
 }
 
@@ -627,11 +556,11 @@ model LlmProvider {
   id             Int          @id @default(autoincrement())
   name           String       @unique
   type           ProviderType
-  baseUrl        String?                        // null = LiteLLM default for the type
-  credentialRef  String                         // secret-manager key name, NEVER the key
+  baseUrl        String?                        // null = LiteLLM default for the type; set for CUSTOM/azure
   isEnabled      Boolean      @default(true)
   priority       Int          @default(100)     // lower = higher priority
   monthlyBudgetUsd Decimal?   @db.Decimal(12,4)
+  credentials    LlmCredential[]                // E6: many BYOK keys per provider — credentialRef REMOVED
   models         LlmModel[]
   createdBy      Int?
   createdAt      DateTime     @default(now())
@@ -640,9 +569,33 @@ model LlmProvider {
   @@map("llm_providers")
 }
 
+// E6: BYOK — many keys per provider, each encrypted at rest with its own rate limits.
+// Write-only via the API (masked reads); decrypted only in the LiteLLM sync service.
+model LlmCredential {
+  id           Int         @id @default(autoincrement())
+  providerId   Int
+  provider     LlmProvider @relation(fields: [providerId], references: [id], onDelete: Cascade)
+  label        String                      // "OpenAI key #2 (billing acct B)"
+  encryptedKey String                      // AES-256-GCM ciphertext
+  iv           String
+  authTag      String
+  keyVersion   Int         @default(1)     // master-key rotation support
+  rpm          Int?                        // admin-entered requests/min limit
+  tpm          Int?                        // admin-entered tokens/min limit
+  isActive     Boolean     @default(true)
+  healthStatus String      @default("unknown")  // ok | rate_limited | auth_failed — from gateway signals
+  lastErrorAt  DateTime?
+  createdBy    Int?
+  createdAt    DateTime    @default(now())
+  modifiedBy   Int?
+  updatedAt    DateTime    @updatedAt
+  @@map("llm_credentials")
+}
+
 model LlmModel {
   id                   Int               @id @default(autoincrement())
   name                 String            // model slug, e.g. "gpt-4o", "gemini-2.5-flash"
+  alias                String            // model-group alias exposed to the app, e.g. "primary-chat"; same alias across rows = one balanced pool (E6)
   displayName          String?
   providerId           Int
   provider             LlmProvider       @relation(fields: [providerId], references: [id])
@@ -670,13 +623,15 @@ model LlmLog {
   session           Session?  @relation(fields: [sessionId], references: [id])
   modelId           Int?
   model             LlmModel? @relation(fields: [modelId], references: [id])
-  mode              String    // "chat" | "voice" | "scoring" | "feedback" | "enhance"
+  mode              String    // "chat" | "voice" | "scoring" | "feedback" | "enhance" | "prune" (E5)
   promptTokens      Int
   completionTokens  Int
   reasoningTokens   Int       @default(0)
   totalTokens       Int
   estimatedCostUsd  Decimal   @db.Decimal(12,6)
   durationMs        Int?
+  isSimulation      Boolean   @default(false)  // E3 — playground spend, excluded from product analytics
+  cacheHit          Boolean   @default(false)  // E4 — semantic cache hit; estimatedCostUsd = 0
   userId            Int?
   personaId         Int?
   createdAt         DateTime  @default(now())
@@ -687,56 +642,22 @@ model LlmLog {
 }
 
 // ─────────────────────────────────────────────
-// CONTENT LIBRARY
+// SESSION SUMMARIES (E5 — automated context pruning)
 // ─────────────────────────────────────────────
 
-model ContentItem {
-  id            Int         @id @default(autoincrement())
-  type          ContentType
-  title         String
-  description   String?     @db.Text
-  storageKey    String      // object-storage path
-  mimeType      String
-  thumbnailKey  String?     // for videos
-  groupId       Int?
-  group         Group?      @relation(fields: [groupId], references: [id])
-  isDeleted     Boolean     @default(false)
-  deletedAt     DateTime?
-  deletedBy     Int?
-  restoredAt    DateTime?
-  restoredBy    Int?
-  reactions     Reaction[]
-  createdBy     Int?
-  createdAt     DateTime    @default(now())
-  modifiedBy    Int?
-  updatedAt     DateTime    @updatedAt
-  @@map("content_items")
-}
-
-model Reaction {
-  id        Int         @id @default(autoincrement())
-  userId    Int
-  itemId    Int
-  item      ContentItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
-  liked     Boolean
-  createdAt DateTime    @default(now())
-  updatedAt DateTime    @updatedAt
-  @@unique([userId, itemId])
-  @@map("reactions")
-}
-
-model ActionButton {
-  id           Int      @id @default(autoincrement())
-  name         String   @unique
-  tooltipText  String?
-  iconKey      String?
-  order        Int      @default(0)
-  isActive     Boolean  @default(true)
-  createdBy    Int?
-  createdAt    DateTime @default(now())
-  modifiedBy   Int?
-  updatedAt    DateTime @updatedAt
-  @@map("action_buttons")
+// Append-only overlay over the raw transcript (never a rewrite). Latest row wins.
+// Built by the prune-session-context worker; the raw ChatMessage history is immutable.
+model SessionSummary {
+  id            Int      @id @default(autoincrement())
+  sessionId     Int
+  session       Session  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  upToMessageId Int                          // cursor: messages up to here are folded into this summary
+  content       String   @db.Text            // rolling compaction — incorporates the previous summary
+  modelId       Int?                         // summarizerModel (logical role) used
+  tokenCount    Int?
+  createdAt     DateTime @default(now())
+  @@index([sessionId])
+  @@map("session_summaries")
 }
 
 // ─────────────────────────────────────────────
@@ -746,8 +667,6 @@ model ActionButton {
 model Announcement {
   id        Int      @id @default(autoincrement())
   text      String   @db.Text
-  groupId   Int?
-  group     Group?   @relation(fields: [groupId], references: [id])
   isActive  Boolean  @default(true)
   createdBy Int?
   createdAt DateTime @default(now())
@@ -763,8 +682,6 @@ model Announcement {
 model AnalyticsSessionRollup {
   id              Int      @id @default(autoincrement())
   periodDate      DateTime @db.Date      // day of the roll-up
-  groupId         Int?
-  cohortId        Int?
   personaId       Int?
   personaVersion  Int?
   totalSessions   Int      @default(0)
@@ -773,7 +690,7 @@ model AnalyticsSessionRollup {
   avgDurationSec    Float?
   avgScore          Float?
   updatedAt       DateTime @updatedAt
-  @@unique([periodDate, groupId, cohortId, personaId, personaVersion])
+  @@unique([periodDate, personaId, personaVersion])   // E1 dropped groupId/cohortId dimensions
   @@map("analytics_session_rollups")
 }
 
@@ -788,6 +705,23 @@ model AnalyticsUserRollup {
   updatedAt             DateTime @updatedAt
   @@unique([userId, periodDate])
   @@map("analytics_user_rollups")
+}
+
+// E7 Stage 1 — append-only event spine drained from Redis Streams by the ingestion worker.
+// Lives in a separate `analytics` Postgres schema, monthly-partitioned. Rollups become
+// consumers of these events; eventId unique gives idempotency. (Stage 2 repoints ingestion
+// at TimescaleDB/ClickHouse without app changes.)
+model AnalyticsEvent {
+  id          BigInt   @id @default(autoincrement())
+  eventId     String   @unique               // uuid — idempotency key
+  type        String                          // session.completed | score.calculated | tokens.consumed | badge.earned | user.active ...
+  occurredAt  DateTime
+  userId      Int?
+  payload     Json
+  version     Int      @default(1)
+  ingestedAt  DateTime @default(now())
+  @@index([type, occurredAt])
+  @@map("analytics_events")          // @@schema("analytics") in the partitioned migration
 }
 
 // ─────────────────────────────────────────────
@@ -850,8 +784,6 @@ model AuditLog {
 // Tracks bulk import jobs
 model ImportReport {
   id               Int          @id @default(autoincrement())
-  groupId          Int?
-  group            Group?       @relation(fields: [groupId], references: [id])
   status           ImportStatus @default(PENDING)
   totalRows        Int          @default(0)
   importedRows     Int          @default(0)
@@ -890,7 +822,7 @@ enum BadgeCategory {
   PERFORMANCE   // score-based
   STREAK        // consecutive-days consistency
   IMPROVEMENT   // month-over-month growth (re-earnable)
-  RANKING       // cohort rank (re-earnable weekly/monthly)
+  RANKING       // global rank (re-earnable weekly/monthly)
 }
 
 enum BadgeTier {
@@ -962,8 +894,6 @@ model UserPerformanceScore {
   id               Int        @id @default(autoincrement())
   userId           Int
   user             User       @relation(fields: [userId], references: [id], onDelete: Cascade)
-  cohortId         Int?
-  groupId          Int?
   periodType       PeriodType
   periodKey        String     // "2026-W24" | "2026-06" | "alltime"
   // raw inputs
@@ -977,14 +907,12 @@ model UserPerformanceScore {
   improvementPct   Float?     // vs same period prior month
   // composite
   performanceScore Float      @default(0)  // 0–100
-  // ranking (updated in the same rollup job after all scores computed)
-  rankInCohort     Int?
-  rankInGroup      Int?
-  percentileInCohort Float?
+  // ranking (single global scope — E1 dropped cohort/group dimensions)
+  globalRank       Int?
+  globalPercentile Float?
   updatedAt        DateTime   @updatedAt
-  @@unique([userId, cohortId, groupId, periodType, periodKey])
-  @@index([cohortId, periodType, periodKey, performanceScore])
-  @@index([groupId,  periodType, periodKey, performanceScore])
+  @@unique([userId, periodType, periodKey])
+  @@index([periodType, periodKey, performanceScore])
   @@map("user_performance_scores")
 }
 ```
@@ -1006,11 +934,10 @@ CREATE TABLE chat_messages_2026_06 PARTITION OF chat_messages
 | `badge_definitions` | all 17 badges defined in PRODUCT_PLAN §3.4 |
 | `assistant_voices` | Male (en-US), Female (en-US) |
 | `voice_styles` | Friendly, Professional, Assertive, Coaching |
-| `llm_providers` | placeholder rows (creds via secret ref) |
-| `llm_models` | common defaults per provider |
-| `action_buttons` | Bulletin, Schedule, Curriculum, Locate, Travel, Help |
 | `external_apis` | LOGIN, USER_LOOKUP rows (urls from env) |
 | `default_credentials` | local-dev accounts (argon2-hashed, loaded from env) |
+
+No `llm_providers` / `llm_models` / `llm_credentials` seeds and no static `model_list` — E6 replaces them with a first-run admin onboarding flow ("add your first provider key"). No `action_buttons` seed — the content library is out of scope.
 
 ---
 
@@ -1031,8 +958,8 @@ All routes prefixed `/api/v1`. Auth: `JWT` (global default-deny). `PUBLIC` = no 
 
 | Method | Path | Auth | Permissions | Notes |
 |---|---|---|---|---|
-| GET | `/users` | JWT | `users:read` | paginated; search `?q=`; filter `?role=&isActive=&groupId=&cohortId=` |
-| GET | `/users/:id` | JWT | `users:read` | full profile with groups, cohorts, supervised-by |
+| GET | `/users` | JWT | `users:read` | paginated; search `?q=`; filter `?role=&isActive=&supervisorId=` |
+| GET | `/users/:id` | JWT | `users:read` | full profile with supervisor + supervisees |
 | POST | `/users` | JWT | `users:write` | create; 409 on duplicate employeeId |
 | PATCH | `/users/:id` | JWT | `users:write` | partial update |
 | DELETE | `/users/:id` | JWT | `users:delete` | soft-delete |
@@ -1047,35 +974,13 @@ All routes prefixed `/api/v1`. Auth: `JWT` (global default-deny). `PUBLIC` = no 
 |---|---|---|---|
 | GET | `/roles` | JWT | list all roles (for dropdowns) |
 
-### Groups (`/api/v1/groups`)
-
-| Method | Path | Auth | Permissions | Notes |
-|---|---|---|---|---|
-| GET | `/groups` | JWT | `groups:read` | paginated, searchable |
-| GET | `/groups/:id` | JWT | `groups:read` | with member count |
-| POST | `/groups` | JWT | `groups:write` | |
-| PATCH | `/groups/:id` | JWT | `groups:write` | |
-| DELETE | `/groups/:id` | JWT | `groups:delete` | soft-delete |
-| GET | `/groups/:id/members` | JWT | `groups:read` | paginated user list |
-| POST | `/groups/:id/members` | JWT | `groups:write` | `{userIds: int[]}` bulk assign |
-| DELETE | `/groups/:id/members/:userId` | JWT | `groups:write` | remove member |
-
-### Domains & Cohorts (`/api/v1/domains`, `/api/v1/cohorts`)
-
-| Method | Path | Auth | Notes |
-|---|---|---|---|
-| GET/POST | `/domains` | JWT | list + create |
-| GET/PATCH/DELETE | `/domains/:id` | JWT | |
-| GET/POST | `/cohorts` | JWT | list + create |
-| GET/PATCH/DELETE | `/cohorts/:id` | JWT | |
-| POST | `/cohorts/:id/members` | JWT | `{userIds: int[]}` bulk enroll |
-| DELETE | `/cohorts/:id/members/:userId` | JWT | |
+> **No `/groups`, `/domains`, or `/cohorts` endpoints — removed by E1.** Trainee organization is the supervisor self-reference on the user; persona/visibility scoping is `isPublic` + per-trainee assignment (see Personas below).
 
 ### Personas (`/api/v1/personas`)
 
 | Method | Path | Auth | Permissions | Notes |
 |---|---|---|---|---|
-| GET | `/personas` | JWT | `personas:read` | paginated; filter `?groupId=` |
+| GET | `/personas` | JWT | `personas:read` | paginated; filter `?isPublic=&assignedUserId=` |
 | GET | `/personas/:id` | JWT | `personas:read` | with score criteria, voice style, current model config |
 | POST | `/personas` | JWT | `personas:write` | |
 | PATCH | `/personas/:id` | JWT | `personas:write` | auto-snapshots a version row |
@@ -1083,14 +988,17 @@ All routes prefixed `/api/v1`. Auth: `JWT` (global default-deny). `PUBLIC` = no 
 | GET | `/personas/:id/versions` | JWT | `personas:read` | version history list |
 | GET | `/personas/:id/versions/:version` | JWT | `personas:read` | version snapshot detail |
 | POST | `/personas/:id/enhance` | JWT | `personas:write` | streams LLM-enhanced instructions (SSE) |
-| GET | `/personas/my` | JWT | own | personas accessible to the logged-in user's groups |
+| GET | `/personas/my` | JWT | own | personas visible to the trainee: `isPublic = true` OR explicitly assigned |
+| GET | `/personas/:id/assignments` | JWT | `personas:write` | trainees this persona is assigned to (E1) |
+| POST | `/personas/:id/assignments` | JWT | `personas:write` | `{userIds: int[]}` assign to trainees |
+| DELETE | `/personas/:id/assignments/:userId` | JWT | `personas:write` | unassign |
 
 ### Sessions (`/api/v1/sessions`)
 
 | Method | Path | Auth | Permissions | Notes |
 |---|---|---|---|---|
 | POST | `/sessions` | JWT | `sessions:write` | starts session → returns `{sessionId, uid, startedAt}` |
-| GET | `/sessions` | JWT | `sessions:read` | paginated; filter `?personaId=&userId=&groupId=&cohortId=&status=&from=&to=`; admins see all, users see own |
+| GET | `/sessions` | JWT | `sessions:read` | paginated; filter `?personaId=&userId=&status=&from=&to=`; admins see all, trainers see supervisees, users see own |
 | GET | `/sessions/:uid` | JWT | `sessions:read` | detail with scores + feedback |
 | GET | `/sessions/:uid/messages` | JWT | `sessions:read` | paginated chat history |
 | POST | `/sessions/:uid/end` | JWT | own | marks COMPLETED; triggers scoring + feedback LLM job |
@@ -1105,50 +1013,47 @@ All routes prefixed `/api/v1`. Auth: `JWT` (global default-deny). `PUBLIC` = no 
 | PATCH | `/llm/providers/:id` | JWT | `llmops:write` ADMIN | |
 | DELETE | `/llm/providers/:id` | JWT | `llmops:write` ADMIN | disable (never hard-delete) |
 | GET | `/llm/models` | JWT | `llmops:read` | list; filter `?providerId=&capability=` |
-| POST | `/llm/models` | JWT | `llmops:write` ADMIN | |
+| POST | `/llm/models` | JWT | `llmops:write` ADMIN | body gains `alias` (model-group) |
 | PATCH | `/llm/models/:id` | JWT | `llmops:write` ADMIN | |
 | POST | `/llm/models/:id/promote` | JWT | `llmops:write` ADMIN | set as default; requires regression suite pass |
-| GET | `/llm/usage` | JWT | `llmops:read` | aggregated token/cost dashboard; filter `?from=&to=&modelId=&interval=` |
+| GET | `/llm/providers/:id/credentials` | JWT | `llmops:write` ADMIN | E6 — masked key list (`sk-...x7Qp`) with health, rpm/tpm, label |
+| POST | `/llm/providers/:id/credentials` | JWT | `llmops:write` ADMIN | `{label, apiKey, rpm?, tpm?}` → encrypted insert → reconcile |
+| PATCH | `/llm/credentials/:id` | JWT | `llmops:write` ADMIN | label/rpm/tpm/isActive; `{apiKey}` present = key replacement (re-encrypt) |
+| DELETE | `/llm/credentials/:id` | JWT | `llmops:write` ADMIN | deactivate (never hard-deleted; audit) → reconcile |
+| POST | `/llm/credentials/:id/verify` | JWT | `llmops:write` ADMIN | one decrypted test call → updates healthStatus |
+| POST | `/llm/sync` | JWT | `llmops:write` ADMIN | force gateway reconciliation now |
+| GET | `/llm/usage` | JWT | `llmops:read` | aggregated token/cost dashboard; filter `?from=&to=&modelId=&interval=&includeSimulation=`; playground spend admin-only (E3) |
 | GET | `/llm/usage/export` | JWT | `llmops:read` ADMIN | XLSX export |
 
-### Content (`/api/v1/content`)
+### Dashboard (`/api/v1/dashboard`) — E2
 
-| Method | Path | Auth | Permissions | Notes |
-|---|---|---|---|---|
-| GET | `/content` | JWT | `content:read` | paginated; filter `?type=&groupId=&isDeleted=`; non-admin scoped to own groups |
-| GET | `/content/:id` | JWT | `content:read` | with reaction counts + own reaction |
-| POST | `/content` | JWT | `content:write` | multipart: file (video or doc) + metadata; validation: type/MIME/size |
-| PATCH | `/content/:id` | JWT | `content:write` | metadata update |
-| DELETE | `/content/:id` | JWT | `content:write` | soft-delete |
-| POST | `/content/:id/restore` | JWT | `content:write` | restore soft-deleted |
-| POST | `/content/:id/react` | JWT | own | `{liked: boolean}` upsert |
-| GET | `/content/archive` | JWT | `content:write` | soft-deleted items |
-
-### Action Buttons (`/api/v1/action-buttons`)
-CRUD + reorder; `content:write` permission; GET is public within JWT.
+| Method | Path | Auth | Returns |
+|---|---|---|---|
+| GET | `/dashboard/me` | JWT (own) | one aggregate payload: current-month performance score + trend points, global rank `{rank, of}`, streak (current/longest + 90-day heat-map array), badge summary (total + 5 recent), last 5 sessions with scores, suggested next persona (weakest criterion). Reads **rollup/gamification tables only** — one round trip, no live scans |
+| GET | `/dashboard/me/progress` | JWT (own) | score trend per criterion over time (`?from=&to=&interval=week\|month`) |
+| GET | `/dashboard/trainer` | JWT TRAINER | supervisee aggregates: avg score, completion rate, active-this-week count, at-risk list, top/bottom performers |
 
 ### Analytics (`/api/v1/analytics`)
 
 | Method | Path | Auth | Notes |
 |---|---|---|---|
-| GET | `/analytics/overview` | JWT `analytics:read` | cohort/group/period summary from rollup tables |
+| GET | `/analytics/overview` | JWT `analytics:read` | period summary from rollup tables (trainers see supervisees only) |
 | GET | `/analytics/sessions` | JWT `analytics:read` | session completion + duration breakdown |
 | GET | `/analytics/scores` | JWT `analytics:read` | per-criterion score trends |
 | GET | `/analytics/users/:userId` | JWT own or `analytics:read` | individual user activity |
 | GET | `/analytics/export` | JWT ADMIN | XLSX export (enqueue) |
 
-All accept `?groupId=&cohortId=&personaId=&version=&from=&to=`.
+All accept `?personaId=&version=&from=&to=`.
 
 ### Announcements / Marquee (`/api/v1/announcements`)
-CRUD; scoped to group; authenticated.
+CRUD; global (no group scope); authenticated.
 
 ### Leaderboard (`/api/v1/leaderboard`)
 
 | Method | Path | Auth | Notes |
 |---|---|---|---|
-| GET | `/leaderboard/cohort/:cohortId` | JWT | returns ranked list; `?period=weekly\|monthly\|alltime`; own row pinned at bottom if not in top 50 |
-| GET | `/leaderboard/group/:groupId` | JWT | same shape, group scope |
-| GET | `/leaderboard/global` | JWT `analytics:read` | Super Admin / Trainer only |
+| GET | `/leaderboard/global` | JWT | all trainees; ranked list; `?period=weekly\|monthly\|alltime`; own row pinned at bottom if not in top 50 |
+| GET | `/leaderboard/my-trainees` | JWT TRAINER | same shape, scoped to the trainer's supervisees |
 | GET | `/leaderboard/me` | JWT | own scores across all periods; performance score breakdown with component weights |
 
 Response shape per row: `{rank, userId, name, avatarUrl, performanceScore, avgScore, completedSessions, currentStreak, totalPracticeMin, topBadges[3], deltaVsPrevPeriod}`.
@@ -1220,6 +1125,9 @@ Typed in `packages/contracts/realtime.ts`.
 // reconnect advisory (drain)
 { "type": "reconnect", "reason": "server_drain" }
 
+// E3 — simulation/playground sessions only: live token + cost burn after each turn
+{ "type": "usage", "promptTokens": 0, "completionTokens": 0, "costUsd": 0, "cumulativeCostUsd": 0 }
+
 // heartbeat ack
 { "type": "pong" }
 ```
@@ -1269,7 +1177,7 @@ DATABASE_URL=postgresql://user:pass@pgbouncer:5432/alfa?pgbouncer=true&connectio
 DATABASE_POOL_SIZE=5
 
 # ── Redis ─────────────────────────────────────
-REDIS_URL=redis://redis:6379
+REDIS_URL=redis://redis:6379          # must include vector search (redis-stack / Redis 8) for E4 semantic cache
 
 # ── Auth ──────────────────────────────────────
 JWT_ACCESS_SECRET=                      # min 64 chars
@@ -1281,6 +1189,13 @@ WS_TICKET_TTL_SECONDS=30
 # ── LiteLLM gateway ───────────────────────────
 LITELLM_BASE_URL=http://litellm:4000
 LITELLM_API_KEY=                        # master key for the gateway
+# Provider API keys are NOT in env — they are admin-entered, encrypted, stored in llm_credentials (E6).
+# No static LiteLLM model_list either; the reconciler pushes it from our DB.
+
+# ── LLM credential encryption / runtime tunables ──
+MASTER_ENCRYPTION_KEY=                  # base64 32 bytes — the ONE LLM-related secret in env (E6)
+SIMULATION_RETENTION_DAYS=7             # E3 — playground sessions purged after N days
+PRUNING_TRIGGER_TOKENS=8000             # E5 default; runtime-overridable in admin settings
 
 # ── Object storage ────────────────────────────
 STORAGE_PROVIDER=s3|azure               # selects the adapter
@@ -1306,11 +1221,11 @@ THROTTLE_TTL_MS=60000
 THROTTLE_LIMIT=100                      # global
 THROTTLE_LOGIN_LIMIT=5                  # /auth/login strict bucket
 
-# ── Uploads ───────────────────────────────────
-UPLOAD_MAX_VIDEO_MB=500
-UPLOAD_MAX_DOC_MB=50
-UPLOAD_ALLOWED_VIDEO_MIME=video/mp4,video/webm,video/quicktime
-UPLOAD_ALLOWED_DOC_MIME=application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document
+# ── Uploads (avatars + bulk-import files; no content library) ──
+UPLOAD_MAX_AVATAR_MB=5
+UPLOAD_ALLOWED_AVATAR_MIME=image/png,image/jpeg,image/webp
+UPLOAD_MAX_IMPORT_MB=25
+UPLOAD_ALLOWED_IMPORT_MIME=application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv
 
 # ── BullMQ / worker ───────────────────────────
 WORKER_CONCURRENCY=5
@@ -1337,43 +1252,45 @@ SENTRY_DSN=                             # optional
 | `rollup` | `rollup-llm-daily` | cron 02:30 UTC | LLM cost aggregates |
 | `telemetry` | `flush-telemetry` | cron every 30 s | drain in-memory accumulator → batch-upsert UserTelemetry |
 | `retention` | `purge-old-messages` | cron monthly | drop old chat_messages / llm_logs / audit_logs partitions older than retention window |
-| `registry` | `sync-llm-registry` | on provider/model change | push updated config to LiteLLM gateway admin API |
+| `registry` | `sync-llm-registry` | provider/credential/model change + cron every 5 min | **E6 reconciler**: decrypt keys in memory, diff desired state vs gateway `GET /model/info`, issue create/delete; write `healthStatus`/`lastErrorAt` back to `LlmCredential` |
+| `crypto` | `rotate-master-key` | manual admin action | **E6** — re-encrypt `llm_credentials` rows under a new `MASTER_ENCRYPTION_KEY`, bump `keyVersion` |
 | `cleanup` | `expire-realtime-tickets` | cron every 5 min | delete expired RealtimeTicket rows |
-| `gamification` | `compute-performance-scores` | on session end + cron 03:00 UTC | recalculate `UserPerformanceScore` for the user in all periods; update cohort/group ranks + percentiles |
+| `cleanup` | `purge-simulation-sessions` | cron daily | **E3** — hard-delete simulation sessions + messages + llm_logs older than `SIMULATION_RETENTION_DAYS` |
+| `pruning` | `prune-session-context` | token threshold (`PRUNING_TRIGGER_TOKENS`), deduped per session | **E5** — summarize oldest ~50% via `summarizerModel`, write `SessionSummary` (rolling compaction), advance cursor |
+| `events` | `ingest-analytics-events` | Redis Stream consumer group | **E7 Stage 1** — drain event stream into append-only `analytics_events` (idempotent on `eventId`) |
+| `gamification` | `compute-performance-scores` | `session.completed` event + cron 03:00 UTC | recalculate `UserPerformanceScore` for the user in all periods; update **global rank + percentile** (E1); filters `isSimulation = false` (E3) |
 | `gamification` | `award-badges` | immediately after `compute-performance-scores` | evaluate each active `BadgeDefinition.criteria` against user's latest stats; insert `UserBadge` rows for newly earned badges; skip if already earned (and not re-earnable in this period) |
-| `gamification` | `update-streaks` | on session end | increment `UserStreak.currentStreak` if last activity was yesterday; reset to 1 if gap > 1 day; update `longestStreak` |
-| `gamification` | `weekly-ranking-badges` | cron Monday 04:00 UTC | compute cohort percentiles for the closed week; award RANKING badges (top-10%, podium, champion) |
+| `gamification` | `update-streaks` | `session.completed` event | increment `UserStreak.currentStreak` if last activity was yesterday; reset to 1 if gap > 1 day; update `longestStreak` |
+| `gamification` | `weekly-ranking-badges` | cron Monday 04:00 UTC | compute **global** percentiles for the closed week (E1); award RANKING badges (top-10%, podium, champion) |
 | `gamification` | `monthly-improvement-badges` | cron 1st of month 04:30 UTC | compute improvement delta vs prior month; award IMPROVEMENT badges |
+
+**E7 decoupling:** the session-end request path only persists + emits `session.completed`; scoring rollups, gamification, and dashboards consume that event off Redis Streams instead of running inline. **E3 firewall:** every rollup/event-emitter path filters `isSimulation = false` (emit-side skip + read-side filter, two independent layers).
 
 ---
 
 ## 12. RBAC Permission Map
 
-Three roles. Permissions checked by `@Permissions()` guard; object-level checks (own-group, own) enforced in services.
+Three roles. Permissions checked by `@Permissions()` guard; object-level checks (own, own-supervisees) enforced in services. **E1 removed all `groups:*` / `cohorts:*` permissions and every "own-group" qualifier** — trainer scope is now the supervisor mapping.
 
 | Permission | SUPER_ADMIN | TRAINER | USER |
 |---|---|---|---|
-| `users:read` | ✓ (all) | ✓ (own-group) | — |
+| `users:read` | ✓ (all) | ✓ (supervisees) | — |
 | `users:write` | ✓ | — | — |
 | `users:delete` | ✓ | — | — |
-| `groups:read` | ✓ | ✓ (own) | — |
-| `groups:write` | ✓ | — | — |
-| `groups:delete` | ✓ | — | — |
-| `cohorts:read` | ✓ | ✓ (own-group) | ✓ (own) |
-| `cohorts:write` | ✓ | — | — |
-| `personas:read` | ✓ | ✓ | ✓ (own-groups) |
-| `personas:write` | ✓ | ✓ | — |
+| `personas:read` | ✓ | ✓ | ✓ (public + assigned) |
+| `personas:write` | ✓ | ✓ (incl. assign/publish) | — |
 | `personas:delete` | ✓ | — | — |
-| `sessions:read` | ✓ (all) | ✓ (own-group) | ✓ (own) |
+| `sessions:read` | ✓ (all) | ✓ (supervisees) | ✓ (own) |
 | `sessions:write` | ✓ | ✓ | ✓ |
-| `content:read` | ✓ | ✓ | ✓ (own-groups) |
-| `content:write` | ✓ | ✓ | — |
-| `analytics:read` | ✓ (global) | ✓ (own-group) | ✓ (own) |
-| `leaderboard:read` | ✓ (global) | ✓ (own-group) | ✓ (own-cohort) |
-| `badges:read` | ✓ (any user) | ✓ (own-group) | ✓ (own) |
+| `dashboard:read` | ✓ | ✓ (supervisees) | ✓ (own) |
+| `analytics:read` | ✓ (global) | ✓ (supervisees) | ✓ (own) |
+| `leaderboard:read` | ✓ (global) | ✓ (global + supervisees) | ✓ (global) |
+| `badges:read` | ✓ (any user) | ✓ (supervisees) | ✓ (own) |
 | `badges:write` | ✓ | — | — |
 | `llmops:read` | ✓ | — | — |
 | `llmops:write` | ✓ | — | — |
+
+`llmops:write` governs the E6 BYOK credential endpoints (`/llm/credentials*`, `/llm/sync`) — keys are write-only and masked on read regardless of role.
 
 ---
 
@@ -1386,6 +1303,7 @@ Three roles. Permissions checked by `@Permissions()` guard; object-level checks 
 | ORM | Prisma | migrations, type safety, client extensions (soft-delete/audit); `$queryRaw` for heavy analytics SQL |
 | Validation | Zod in `packages/contracts` | one schema source for API, env, WS protocol — and the future frontend |
 | LLM access | OpenAI SDK → LiteLLM gateway + DB registry | OpenAI, Gemini, Azure OpenAI, OpenRouter as runtime config; no per-provider SDK code |
+| LLM credentials | **BYOK: admin-entered keys, AES-256-GCM encrypted in `llm_credentials`, reconciled to the gateway** (E6) | our DB owns keys for encryption/audit/masking/rotation; gateway is a sync target, not a second source of truth |
 | Agent framework | **None** | roleplay = system prompt + history + streaming; scoring = single structured call; a graph framework adds nothing here |
 | WS transport | raw `ws` via Nest gateways | binary audio frames, minimal overhead; Redis pub/sub for cross-pod control |
 | Jobs | BullMQ | Redis-only, first-class Nest integration |

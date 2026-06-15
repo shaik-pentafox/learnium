@@ -18,7 +18,6 @@
 | **Realtime Chat** | Text roleplay over WebSocket (LangGraph-based session engine; legacy direct-Gemini path still present) |
 | **Realtime Voice** | Live voice roleplay over WebSocket — Gemini Live and Azure VoiceLive backends, PCM16 audio streaming |
 | **Session Scoring** | End-of-session LLM-generated feedback and per-criterion scores against the persona's scoring config |
-| **Content Library ("Curate")** | Training videos/documents in object storage, group-scoped visibility, soft-delete/restore/archive, like/dislike reactions, configurable UI action buttons |
 | **Analytics** | Session, completion, and score dashboards by cohort, user, persona, and version; Excel exports |
 | **LLM Observability** | Token usage and cost per model/session, trends, exports — backed by an `llm_logs` table plus a model-pricing table (already a solid foundation) |
 | **Telemetry & Audit** | Per-request user-activity tracking, daily stats, Postgres audit triggers on core tables |
@@ -35,11 +34,13 @@ Three roles. No more.
 
 | Role | Who | What they can do |
 |---|---|---|
-| **Super Admin** | Platform operator | Full control: manage users, groups, cohorts, personas, content, LLM registry, analytics, LLM ops, gamification config, system settings |
-| **Trainer** | Facilitators, L&D staff | Configure personas (instructions, scoring criteria, voice, model roles), manage content library, view analytics for their groups, view leaderboards |
-| **User (Trainee)** | End learners | Practice roleplay sessions (text + voice), view own session history and scores, view own badges and leaderboard rank within their cohort, browse content |
+| **Super Admin** | Platform operator | Full control: manage users, personas, LLM provider keys + model registry, analytics, LLM ops, gamification config, system settings |
+| **Trainer** | Facilitators, L&D staff | Configure and test personas (instructions, scoring criteria, voice, model roles; playground simulation mode), assign/publish personas to trainees, view analytics for their trainees, view leaderboards |
+| **User (Trainee)** | End learners | Practice roleplay sessions (text + voice), view own session history and scores, view own badges and global leaderboard rank |
 
 Role is set at account creation. One role per user. Super Admin assigns roles.
+
+Trainee–trainer relationship is a supervisor self-reference on the user (the only organizational relationship); there are no groups, business domains, or cohorts.
 
 ---
 
@@ -82,9 +83,10 @@ Performance Score =
 
 | View | Scope | Default sort |
 |---|---|---|
-| **Cohort** | users in same cohort | Performance Score (monthly) |
-| **Group** | users in same group | Performance Score (monthly) |
-| **Global** | all users in org (Super Admin / Trainer only) | Performance Score (monthly) |
+| **Global** | all trainees | Performance Score (monthly) |
+| **My Trainees** | a trainer's supervisees (Trainer / Super Admin only) | Performance Score (monthly) |
+
+There are only two scopes — no cohort/group dimension. `UserPerformanceScore` keeps a single global rank + percentile.
 
 Time periods: **this week / this month / all time**.  
 Columns visible: rank, name, avatar, performance score, sessions count, avg score, current streak, badges count.  
@@ -129,15 +131,15 @@ Earned once (some re-earnable monthly). Displayed on profile and leaderboard row
 | Badge | Trigger | Tier |
 |---|---|---|
 | Rising Star | Score improved ≥ 20% vs last month | Silver |
-| Most Improved | Top improver in cohort this month | Gold |
+| Most Improved | Top improver among all trainees this month | Gold |
 
 **Ranking badges (weekly/monthly, re-earnable):**
 
 | Badge | Trigger | Tier |
 |---|---|---|
-| Top 10% | In top 10th percentile of cohort | Silver |
-| Podium | Top 3 in cohort this month | Gold |
-| Champion | Rank 1 in cohort this month | Platinum |
+| Top 10% | In top 10th percentile of all trainees | Silver |
+| Podium | Top 3 globally this month | Gold |
+| Champion | Rank 1 globally this month | Platinum |
 
 Badge tiers render with distinct colors: Bronze → Silver → Gold → Platinum. Earning a badge triggers an in-app toast + animation. Badge history shows when and for what session/period each was earned.
 
@@ -145,18 +147,17 @@ Badge tiers render with distinct colors: Bronze → Silver → Gold → Platinum
 
 **Trainee dashboard:**
 - Own performance score card (current month) with trend spark-line
-- Own rank in cohort (e.g. "12 / 47") with position indicator
+- Own global rank (e.g. "12 / 470") with position indicator
 - Badge shelf — recent and rare badges, total badge count
 - Streak counter with calendar heat-map (GitHub-style)
 - Session history: last 5 with scores, "continue practicing" CTA
 - Suggested next persona based on weakest criterion score
 
 **Trainer dashboard:**
-- Cohort leaderboard (top 10 + own trainees highlighted)
-- Group-level aggregates: avg score, completion rate, active users this week
+- My Trainees leaderboard (top 10 supervisees)
+- Trainee aggregates: avg score, completion rate, active users this week
 - Score breakdown by persona and criterion
 - At-risk users: low completion rate or declining scores flagged
-- Content engagement stats (video/doc views, reactions)
 
 **Super Admin dashboard:**
 - Org-wide leaderboard + global KPIs
@@ -211,8 +212,8 @@ Badge tiers render with distinct colors: Bronze → Silver → Gold → Platinum
 - API versioning (`/api/v1/...`) — prerequisite for any frontend work.
 - Admin-manageable LLM provider/model configuration (see §5.4 — currently hardcoded).
 - **Gamification & leaderboard system** (see §3) — not built.
-- Notification system (session completed, feedback ready, badge earned, content published).
-- Search across content/personas (Postgres full-text now; pgvector semantic search later).
+- Notification system (session completed, feedback ready, badge earned).
+- Search across personas (Postgres full-text now; pgvector semantic search later).
 - Multi-tenancy readiness (tenant scoping strategy) — current design is single-organization.
 - Data retention & right-to-deletion (chat history is PII-adjacent and grows unbounded).
 - Offline persona evaluation (prompt regression testing) so model/provider swaps are safe.
@@ -246,7 +247,7 @@ Badge tiers render with distinct colors: Bronze → Silver → Gold → Platinum
               │   alfa-api (REST)  │   │ alfa-realtime (WS/voice) │
               │   FastAPI, N pods  │   │ FastAPI, N pods          │
               │   users/personas/  │   │ chat WS, voice WS,       │
-              │   content/analytics│   │ end-session scoring      │
+              │   analytics        │   │ end-session scoring      │
               └───┬────────┬───────┘   └───┬──────────┬───────────┘
                   │        │               │          │
         ┌─────────▼─┐   ┌──▼───────────────▼──┐   ┌───▼────────────────┐
@@ -289,15 +290,16 @@ Badge tiers render with distinct colors: Bronze → Silver → Gold → Platinum
 
 1. **LiteLLM gateway (OSS, in-cluster).** The app speaks one OpenAI-format API to the gateway. The gateway holds provider credentials and routes by model name with built-in load balancing, fallbacks, retries, per-key budgets, and spend logging. Supported out of the box: **OpenAI, Google Gemini, Azure OpenAI, OpenRouter**, Anthropic, Vertex, and any OpenAI-compatible endpoint (vLLM, Ollama, Together, Groq…). This deletes the homegrown quota spreader.
 
-2. **Provider/model registry in the database (admin-configurable).** Extends the existing model-pricing table:
+2. **Provider/model registry + BYOK credential vault in the database (admin-configurable).** The platform admin brings the keys — several Gemini/OpenAI keys, an OpenRouter key — and manages everything from the admin UI at runtime. **No model or key data ships in seeds or env**; the only LLM-related secret in env is `MASTER_ENCRYPTION_KEY`.
 
    | Table | Purpose |
    |---|---|
-   | `llm_providers` | provider type (openai / gemini / azure_openai / openrouter / custom), base URL, credential reference (secret name — never the key itself), enabled flag, priority |
-   | `llm_models` | model name, provider FK, capabilities (chat / streaming / voice / vision), context window, input/output price per million tokens, default flag |
-   | persona config | each roleplay persona references models by logical role ("conversation model", "scoring model") resolved through the registry — never a hardcoded model string |
+   | `llm_providers` | provider type (openai / gemini / azure_openai / openrouter / custom), base URL, enabled flag, priority, monthly budget — **no credential column** |
+   | `llm_credentials` | many keys per provider; each stored `{encryptedKey, iv, authTag, keyVersion}` (AES-256-GCM), admin-entered `rpm`/`tpm`, health status. **Write-only API** — create/replace yes, read-back never (masked `sk-...x7Qp` only) |
+   | `llm_models` | model name + `alias` (model-group exposed to the app), provider FK, capabilities (chat / streaming / voice / vision), context window, input/output price per million tokens, default flag |
+   | persona config | each roleplay persona references models by logical role ("conversation model", "scoring model", "summarizer model") resolved to an alias through the registry — never a hardcoded model string |
 
-   Admin API (`/api/v1/llm/providers`, `/api/v1/llm/models`) to add/disable providers and models at runtime; registry changes sync to the gateway config. Swapping the whole platform from Gemini to OpenRouter = insert rows, flip defaults, zero deploys.
+   Admin API (`/api/v1/llm/providers`, `/api/v1/llm/models`, `/api/v1/llm/credentials`) adds/disables providers, keys, and models at runtime. A reconciler job decrypts in memory and syncs desired state to the gateway via its Management API (single source of truth = our encrypted Postgres); `usage-based-routing-v2` load-balances 1000+ users across the key pool by each key's rpm/tpm. Swapping the whole platform from Gemini to OpenRouter = add a key + models, flip defaults, zero deploys. (Full design: [ENHANCEMENT_PLAN E6](./ENHANCEMENT_PLAN.md).)
 
 **Routing & resilience rules:**
 - Every persona resolves to a primary model + ordered fallback list (e.g. `gemini-2.5-flash → gpt-4o-mini → openrouter/llama-3.3-70b`).
@@ -309,7 +311,7 @@ Badge tiers render with distinct colors: Bronze → Silver → Gold → Platinum
 
 ### 5.5 Application structure
 
-Modular monolith with strict module boundaries — `core` (config, auth, db, storage, cache, llm) plus domain modules (identity, personas, sessions, realtime, content, analytics, llmops) and background workers. Transport layers do HTTP/WS only; services hold business logic; repositories own data access. Detailed structure in [BACKEND_PLAN.md §2](./BACKEND_PLAN.md).
+Modular monolith with strict module boundaries — `core` (config, auth, db, storage, cache, llm, crypto, events) plus domain modules (identity, personas, sessions, realtime, dashboard, analytics, llmops) and background workers. Transport layers do HTTP/WS only; services hold business logic; repositories own data access. Detailed structure in [BACKEND_PLAN.md §2](./BACKEND_PLAN.md).
 
 ### 5.6 Realtime scaling design
 
@@ -328,7 +330,7 @@ Today a WebSocket session is an object in one process. Target:
 - **PgBouncer** (transaction pooling); per-pod app pools shrink accordingly.
 - **Analytics rollups**: worker jobs materialize session/score/usage aggregates into summary tables; dashboards read rollups, not live multi-CTE scans.
 - **Retention**: partition chat history, LLM logs, audit logs, telemetry by month; purge/archive job to object storage.
-- **pgvector** for semantic search over personas/content when needed — no separate vector DB until proven necessary.
+- **pgvector** for semantic search over personas when needed — no separate vector DB until proven necessary.
 - **Soft-delete centralization**: data layer injects the filter; impossible to forget.
 
 ### 5.8 API contract
@@ -396,7 +398,7 @@ Coverage gate 80% in CI. TDD for all new code. Strict linting + type checking + 
 
 ## 10. Phased Roadmap
 
-Detailed build phases (scaffold → identity/auth → personas/sessions → LLM registry & realtime → content/analytics/llmops → hardening & cutover → enhancements) live in [BACKEND_PLAN.md §6](./BACKEND_PLAN.md).
+Detailed build phases (scaffold → identity/auth → personas/sessions → LLM registry & realtime → dashboard/analytics/llmops → hardening & cutover → enhancements) live in [BACKEND_PLAN.md §6](./BACKEND_PLAN.md).
 
 **Interim hardening of the legacy app** while the rebuild proceeds (it keeps serving production): SQL-injection fixes, CORS allowlist, auth on open endpoints, login rate limit — the day-1 items from §4. Nothing else gets invested in the legacy codebase.
 

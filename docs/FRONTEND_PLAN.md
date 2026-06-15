@@ -52,17 +52,16 @@ apps/web/
 │   │   ├── login.tsx
 │   │   ├── _auth/                  # authenticated layout (route guard)
 │   │   │   ├── dashboard.tsx       # role-aware: trainee KPIs vs trainer vs admin
-│   │   │   ├── leaderboard/        # cohort leaderboard, own rank, period switcher
+│   │   │   ├── leaderboard/        # global / my-trainees leaderboard, own rank, period switcher
 │   │   │   ├── badges/             # badge shelf, catalog, unread notifications
 │   │   │   ├── users/              # list, detail drawer, create/edit, bulk import
 │   │   │   ├── personas/           # list, builder (instructions, scoring, voice,
-│   │   │   │                       #   model roles), version history
+│   │   │   │                       #   model roles), version history, testing playground (E3)
 │   │   │   ├── roleplay/           # session launcher, chat session, voice session,
 │   │   │   │                       #   feedback & score reveal
-│   │   │   ├── content/            # video/doc library, archive, upload
-│   │   │   ├── analytics/          # cohort/user/persona dashboards, exports
-│   │   │   ├── llm-ops/            # provider/model registry admin, usage & cost
-│   │   │   └── settings/           # profile, org groupings, roles admin
+│   │   │   ├── analytics/          # user/persona dashboards, exports
+│   │   │   ├── llm-ops/            # provider/model registry + BYOK key mgmt (E6), usage & cost
+│   │   │   └── settings/           # profile, roles admin
 │   ├── components/
 │   │   ├── ui/                     # vendored shadcn primitives (owned, themed)
 │   │   ├── data-table/             # tablecn-based server-side table kit
@@ -116,15 +115,13 @@ Three roles drive what renders in the sidebar and what routes are accessible.
 
 | Nav item | Super Admin | Trainer | User (Trainee) |
 |---|---|---|---|
-| Dashboard | ✓ (org KPIs + system health) | ✓ (group KPIs + at-risk users) | ✓ (own score card + streak) |
-| Leaderboard | ✓ (global) | ✓ (own groups) | ✓ (own cohort) |
+| Dashboard | ✓ (org KPIs + system health) | ✓ (supervisee KPIs + at-risk users) | ✓ (own score card + streak) |
+| Leaderboard | ✓ (global) | ✓ (global + my trainees) | ✓ (global) |
 | My Badges | ✓ | ✓ | ✓ |
 | Practice (Roleplay) | ✓ | ✓ | ✓ |
-| Content | ✓ | ✓ (upload + manage) | ✓ (view) |
-| Personas | ✓ | ✓ (build + manage) | — |
-| Users | ✓ | ✓ (view own-group) | — |
-| Groups / Cohorts | ✓ | ✓ (view own) | — |
-| Analytics | ✓ (global) | ✓ (own groups) | — |
+| Personas | ✓ | ✓ (build + manage + playground) | — |
+| Users | ✓ | ✓ (view supervisees) | — |
+| Analytics | ✓ (global) | ✓ (supervisees) | — |
 | LLM Ops | ✓ | — | — |
 | Settings | ✓ | profile only | profile only |
 
@@ -137,19 +134,18 @@ Route guards in TanStack Router check `user.role` from the auth store; forbidden
 | Screen | Role(s) | Notes |
 |---|---|---|
 | Login | all | credential form, error states; clean brand moment (single tasteful animated accent) |
-| **Dashboard — Trainee** | USER | Performance score ring (current month), rank in cohort (e.g. "12 / 47"), badge shelf, streak counter, last 5 sessions with scores, "Start Practice" CTA, weakest-criterion callout |
-| **Dashboard — Trainer** | TRAINER | Cohort leaderboard preview (top 5 + full link), group avg score + completion rate, at-risk users flagged (low completion / declining scores), content engagement strip |
+| **Dashboard — Trainee** | USER | Performance score ring (current month), global rank (e.g. "12 / 470"), badge shelf, streak counter, last 5 sessions with scores, "Start Practice" CTA, weakest-criterion callout |
+| **Dashboard — Trainer** | TRAINER | My Trainees leaderboard preview (top 5 + full link), supervisee avg score + completion rate, at-risk users flagged (low completion / declining scores) |
 | **Dashboard — Admin** | SUPER_ADMIN | Org-wide KPIs (WAU, sessions today, avg score, active streaks), LLM cost sparkline, system health tiles (API latency, WS sessions live, job queue depth) |
-| **Leaderboard** | all | Period switcher (weekly / monthly / all-time); ranked table with avatars, score bars, badge chips; own row pinned at bottom if outside top 50; cohort/group scope selector |
+| **Leaderboard** | all | Period switcher (weekly / monthly / all-time); ranked table with avatars, score bars, badge chips; own row pinned at bottom if outside top 50; global / my-trainees scope selector (my-trainees for Trainer/Admin only) |
 | **Badge Catalog & Profile** | all | Full badge grid (earned in color, locked greyed); earned date and triggering session; notification dot for unread; badge-earned toast animation on new award |
 | Users | SUPER_ADMIN, TRAINER | server-side data table (search/filter/sort/paginate in URL), detail drawer, create/edit, bulk-import wizard with progress + error report |
-| Personas | SUPER_ADMIN, TRAINER | card/list browse; builder (identity, instructions, scoring criteria, voice style, model roles from registry); version history diff view |
+| Personas | SUPER_ADMIN, TRAINER | card/list browse; builder (identity, instructions, scoring criteria, voice style, model roles from registry; `isPublic` + trainee assignment); version history diff view; **testing playground** (E3): pick a version → chat panel + running token/cost meter + "Run scoring" button, unmistakable simulation banner |
 | Roleplay — chat | all | streaming messages, typing indicator, emotion/emoji surface, reconnect banner, end-session → animated feedback + per-criterion score reveal |
 | Roleplay — voice | all | mic permission flow, live waveform, interruption handling, captions, post-session feedback + score reveal |
-| Content library | all | video/doc grids, group-scoped; upload (Trainer/Admin) with validation; archive/restore; reactions |
-| Analytics | SUPER_ADMIN, TRAINER | filterable dashboards (cohort/user/persona/version), chart kit, Excel export |
-| LLM Ops | SUPER_ADMIN | provider/model registry CRUD, usage/cost charts, model-promotion status |
-| Settings | all | profile + avatar; org groupings + roles admin (Super Admin only) |
+| Analytics | SUPER_ADMIN, TRAINER | filterable dashboards (user/persona/version), chart kit, Excel export |
+| LLM Ops | SUPER_ADMIN | provider/model registry CRUD; **BYOK key management** (E6): masked key entry, per-key rpm/tpm + health status (ok / rate-limited / auth-failed), verify button; usage/cost charts (incl. playground spend), model-promotion status |
+| Settings | all | profile + avatar; roles admin (Super Admin only) |
 
 ---
 
@@ -186,24 +182,24 @@ Vite + TanStack Router/Query scaffold in `apps/web`; Tailwind v4 + shadcn init +
 **Exit:** themed shell with auth guard renders against mocked API.
 
 ### Phase F1 — Identity surfaces (backend Phase 1–2)
-Login + session flow against real auth; **role-aware** app shell (sidebar hides irrelevant nav by role); users data-table (tablecn) with URL state; user create/edit + role gating; bulk-import wizard; settings (groupings, roles matrix).
+Login + session flow against real auth; **role-aware** app shell (sidebar hides irrelevant nav by role); users data-table (tablecn) with URL state; user create/edit + role gating + supervisor assignment; bulk-import wizard; settings (roles matrix).
 
 **Exit:** full user-management workflows live.
 
 ### Phase F2 — Personas & roleplay chat (backend Phase 2–3)
-Persona browse + builder + version history; session launcher; chat session screen with streaming WS, reconnect banner, end-session + feedback/score reveal.
+Persona browse + builder + version history + `isPublic`/assignment controls; persona testing playground panel (E3: chat + token/cost meter + run-scoring, simulation banner); session launcher; chat session screen with streaming WS, reconnect banner, end-session + feedback/score reveal.
 
-**Exit:** complete text roleplay loop in the browser.
+**Exit:** complete text roleplay loop in the browser; persona playground usable.
 
 ### Phase F3 — Voice (backend Phase 3)
 Audio pipeline (worklet capture → PCM16 frames → WS; jitter-buffered playback); voice session screen on ElevenLabs UI components (waveform, indicators, captions); interruption + reconnect handling; cross-browser audio QA (Chrome/Edge/Safari).
 
 **Exit:** voice roleplay end-to-end.
 
-### Phase F4 — Content, analytics, LLM ops + gamification (backend Phase 4)
-Content library (grids, upload, archive, reactions); analytics dashboards + chart kit + exports; LLM ops admin (registry CRUD, usage/cost). **Gamification screens**: leaderboard (cohort/group/global, period switcher, own-row pinning), badge catalog + shelf, streak calendar, role-aware dashboards, `BadgeToast` celebrate animation, badge notification dot.
+### Phase F4 — Dashboard, analytics, LLM ops + gamification (backend Phase 4)
+Trainee + trainer dashboard pages (E2); analytics dashboards + chart kit + exports; LLM ops admin (registry CRUD, **BYOK key management** with masked entry + per-key health, usage/cost incl. playground spend). **Gamification screens**: leaderboard (global + my-trainees, period switcher, own-row pinning), badge catalog + shelf, streak calendar, role-aware dashboards, `BadgeToast` celebrate animation, badge notification dot.
 
-**Exit:** feature parity with legacy frontend scope + full gamification UI live.
+**Exit:** the in-scope feature set + full gamification UI live.
 
 ### Phase F5 — Polish & launch (backend Phase 5)
 Playwright E2E suite green; accessibility pass (keyboard, contrast, reduced motion); performance pass (route-level code splitting, bundle budget < 300 KB initial gz, chart lazy-load); empty/error/loading state sweep; visual QA against the design bar; cutover with the backend parallel run.
