@@ -11,6 +11,8 @@ import { AllExceptionsFilter } from './core/errors/all-exceptions.filter';
 import { ResponseInterceptor } from './core/envelope/response.interceptor';
 import { HealthModule } from './health/health.module';
 import { AuthModule } from './modules/auth/auth.module';
+import { QueueModule } from './core/queue/queue.module';
+import { IdentityModule } from './modules/identity/identity.module';
 import type { Env } from './core/config/env.schema';
 
 @Module({
@@ -33,6 +35,8 @@ import type { Env } from './core/config/env.schema';
     }),
     HealthModule,
     AuthModule,
+    QueueModule,
+    IdentityModule,
   ],
   providers: [
     { provide: APP_FILTER, useClass: AllExceptionsFilter },

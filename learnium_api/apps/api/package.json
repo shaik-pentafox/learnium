@@ -13,7 +13,9 @@
   },
   "dependencies": {
     "@clickhouse/client": "^1.8.2",
+    "@fastify/multipart": "^10.0.0",
     "@learnium/contracts": "*",
+    "@nestjs/bullmq": "^11.0.4",
     "@nestjs/common": "^11.0.0",
     "@nestjs/config": "^4.0.0",
     "@nestjs/core": "^11.0.0",
@@ -24,6 +26,8 @@
     "@nestjs/throttler": "^6.4.0",
     "@prisma/client": "^6.9.0",
     "argon2": "^0.43.0",
+    "bullmq": "^5.78.1",
+    "exceljs": "^4.4.0",
     "ioredis": "^5.4.1",
     "nestjs-pino": "^4.1.0",
     "passport": "^0.7.0",
@@ -39,7 +43,6 @@
     "seed": "ts-node --project tsconfig.json prisma/seed.ts"
   },
   "devDependencies": {
-    "ts-node": "^10.9.2",
     "@learnium/tsconfig": "*",
     "@nestjs/cli": "^11.0.0",
     "@nestjs/schematics": "^11.0.0",
@@ -53,6 +56,7 @@
     "prisma": "^6.9.0",
     "supertest": "^7.0.0",
     "ts-jest": "^29.2.4",
+    "ts-node": "^10.9.2",
     "typescript": "^5.5.4"
   }
 }

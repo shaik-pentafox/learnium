@@ -81,3 +81,20 @@ model RealtimeTicket {
   @@index([userId])
   @@map("realtime_tickets")
 }
+
+// ── Bulk Import ───────────────────────────────────────────────────────────────
+
+model ImportReport {
+  id          String   @id @default(uuid())
+  userId      Int
+  status      String   @default("PENDING") // PENDING | PROCESSING | DONE | FAILED
+  totalRows   Int      @default(0)
+  successRows Int      @default(0)
+  errorRows   Int      @default(0)
+  errorData   Json?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([userId])
+  @@map("import_reports")
+}

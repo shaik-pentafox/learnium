@@ -6,6 +6,7 @@ import { ConfigService } from '@nestjs/config';
 import type { Env } from '../config/env.schema';
 import { JwtStrategy } from './strategies/jwt.strategy';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
+import { RolesGuard } from './guards/roles.guard';
 import { LocalVerifier } from './verifiers/local.verifier';
 import { CREDENTIAL_VERIFIER } from './verifiers/credential-verifier.interface';
 
@@ -26,6 +27,7 @@ import { CREDENTIAL_VERIFIER } from './verifiers/credential-verifier.interface';
     LocalVerifier,
     { provide: CREDENTIAL_VERIFIER, useExisting: LocalVerifier },
     { provide: APP_GUARD, useClass: JwtAuthGuard },
+    { provide: APP_GUARD, useClass: RolesGuard },
   ],
   exports: [JwtModule, CREDENTIAL_VERIFIER],
 })
