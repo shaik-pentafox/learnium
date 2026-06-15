@@ -1,6 +1,9 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../database/prisma.service';
 import { LlmClientService } from './llm-client.service';
+import { DomainException } from '../errors/domain.errors';
+import { ErrorCode } from '@learnium/contracts';
+import { HttpStatus } from '@nestjs/common';
 
 export interface ScoreRow {
   criterionId: number;
@@ -48,6 +51,8 @@ export class ScoringService {
     const criteria = session.persona.scoreCriteria;
     if (criteria.length === 0) return { scores: [], feedback: null };
 
+    const modelName = await this.resolveModel(session.persona.scoringModelId);
+
     let llmResult: LlmScoringResponse | null = null;
 
     try {
@@ -75,7 +80,7 @@ Return ONLY valid JSON in this exact format:
   "overallFeedback": "<2-3 sentence summary>"
 }`;
 
-      const raw = await this.llm.complete([{ role: 'user', content: prompt }]);
+      const raw = await this.llm.complete([{ role: 'user', content: prompt }], modelName);
       llmResult = JSON.parse(raw) as LlmScoringResponse;
     } catch (err) {
       this.logger.error({ err }, 'Scoring LLM call failed');
@@ -102,5 +107,21 @@ Return ONLY valid JSON in this exact format:
     ]);
 
     return { scores: scoreRows, feedback: llmResult?.overallFeedback ?? null };
+  }
+
+  private async resolveModel(modelId: number | null): Promise<string> {
+    if (modelId) {
+      const m = await this.prisma.llmModel.findUnique({ where: { id: modelId } });
+      if (m) return m.name;
+    }
+    const def = await this.prisma.llmModel.findFirst({ where: { isDefault: true } });
+    if (!def) {
+      throw new DomainException(
+        ErrorCode.PROVIDER_UNAVAILABLE,
+        'No LLM model configured. Admin must register and promote a model via /llm/models.',
+        HttpStatus.SERVICE_UNAVAILABLE,
+      );
+    }
+    return def.name;
   }
 }

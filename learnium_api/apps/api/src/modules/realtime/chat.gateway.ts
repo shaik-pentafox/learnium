@@ -50,7 +50,14 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     const session = await this.prisma.session.findUnique({
       where: { uid: sessionUid },
       include: {
-        persona: { select: { id: true, name: true, systemPrompt: true } },
+        persona: {
+          select: {
+            id: true,
+            name: true,
+            systemPrompt: true,
+            conversationModelId: true,
+          },
+        },
       },
     });
 
@@ -63,6 +70,12 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       return;
     }
 
+    const modelName = await this.resolveModel(session.persona.conversationModelId);
+    if (!modelName) {
+      this.close(client, 4503, 'No LLM model configured. Admin must register a model via /llm/models.');
+      return;
+    }
+
     const wsClient = this.registry.add(client, userId);
     this.registry.attachSession(
       wsClient,
@@ -70,6 +83,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       session.uid,
       session.persona.systemPrompt,
       session.persona.name,
+      modelName,
     );
 
     this.send(client, {
@@ -149,7 +163,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
     let fullContent = '';
     try {
-      for await (const chunk of this.llm.stream(messages)) {
+      for await (const chunk of this.llm.stream(messages, wsClient.modelName!)) {
         if (!chunk.done) {
           fullContent += chunk.delta;
           this.send(client, { type: 'token', delta: chunk.delta });
@@ -233,6 +247,15 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
         emoji: null,
       });
     }
+  }
+
+  private async resolveModel(modelId: number | null): Promise<string | null> {
+    if (modelId) {
+      const m = await this.prisma.llmModel.findUnique({ where: { id: modelId } });
+      if (m) return m.name;
+    }
+    const def = await this.prisma.llmModel.findFirst({ where: { isDefault: true } });
+    return def?.name ?? null;
   }
 
   private send(client: WebSocket, payload: unknown): void {

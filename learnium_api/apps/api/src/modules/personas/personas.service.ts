@@ -7,6 +7,8 @@ import type { CreatePersonaDto, UpdatePersonaDto, PersonaQueryDto } from './dto/
 const PERSONA_INCLUDE = {
   voiceStyle: true,
   scoreCriteria: { orderBy: { order: 'asc' as const } },
+  conversationModel: { select: { id: true, name: true } },
+  scoringModel: { select: { id: true, name: true } },
 } satisfies Prisma.PersonaInclude;
 
 @Injectable()
@@ -74,6 +76,8 @@ export class PersonasService {
           ...(dto.description !== undefined ? { description: dto.description } : {}),
           ...(dto.customInstructions !== undefined ? { customInstructions: dto.customInstructions } : {}),
           ...(dto.voiceStyleId !== undefined ? { voiceStyleId: dto.voiceStyleId } : {}),
+          ...(dto.conversationModelId !== undefined ? { conversationModelId: dto.conversationModelId } : {}),
+          ...(dto.scoringModelId !== undefined ? { scoringModelId: dto.scoringModelId } : {}),
           createdById,
           updatedById: createdById,
         },
@@ -119,6 +123,8 @@ export class PersonasService {
     if (personaData.systemPrompt !== undefined) data.systemPrompt = personaData.systemPrompt;
     if (personaData.customInstructions !== undefined) data.customInstructions = personaData.customInstructions;
     if ('voiceStyleId' in personaData) data.voiceStyleId = personaData.voiceStyleId ?? null;
+    if ('conversationModelId' in personaData) data.conversationModelId = personaData.conversationModelId ?? null;
+    if ('scoringModelId' in personaData) data.scoringModelId = personaData.scoringModelId ?? null;
 
     const persona = await this.prisma.persona.update({
       where: { id },

@@ -14,6 +14,8 @@ export const CreatePersonaDtoSchema = z.object({
   systemPrompt: z.string().min(1),
   customInstructions: z.string().optional(),
   voiceStyleId: z.number().int().positive().optional(),
+  conversationModelId: z.number().int().positive().optional(),
+  scoringModelId: z.number().int().positive().optional(),
   scoreCriteria: z.array(ScoreCriterionSchema).optional(),
 });
 
@@ -23,6 +25,8 @@ export const UpdatePersonaDtoSchema = z.object({
   systemPrompt: z.string().min(1).optional(),
   customInstructions: z.string().optional(),
   voiceStyleId: z.number().int().positive().nullable().optional(),
+  conversationModelId: z.number().int().positive().nullable().optional(),
+  scoringModelId: z.number().int().positive().nullable().optional(),
   scoreCriteria: z.array(ScoreCriterionSchema).optional(),
 });
 

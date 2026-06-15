@@ -21,7 +21,7 @@ export class LlmClientService {
 
   async *stream(
     messages: OpenAI.Chat.ChatCompletionMessageParam[],
-    model = 'gpt-4o-mini',
+    model: string,
   ): AsyncGenerator<StreamChunk> {
     const response = await this.client.chat.completions.create({
       model,
@@ -39,7 +39,7 @@ export class LlmClientService {
 
   async complete(
     messages: OpenAI.Chat.ChatCompletionMessageParam[],
-    model = 'gpt-4o-mini',
+    model: string,
   ): Promise<string> {
     const resp = await this.client.chat.completions.create({
       model,

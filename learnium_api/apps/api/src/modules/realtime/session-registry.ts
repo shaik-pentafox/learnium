@@ -8,6 +8,7 @@ export interface WsClient {
   sessionUid?: string;
   systemPrompt?: string;
   personaName?: string;
+  modelName?: string;
 }
 
 @Injectable()
@@ -27,11 +28,13 @@ export class SessionRegistry {
     sessionUid: string,
     systemPrompt: string,
     personaName: string,
+    modelName: string,
   ): void {
     client.sessionDbId = sessionDbId;
     client.sessionUid = sessionUid;
     client.systemPrompt = systemPrompt;
     client.personaName = personaName;
+    client.modelName = modelName;
     this.bySession.set(sessionDbId, client);
   }
 

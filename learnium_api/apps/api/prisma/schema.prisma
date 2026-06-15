@@ -97,23 +97,63 @@ model VoiceStyle {
   @@map("voice_styles")
 }
 
+// ── LLM Registry ─────────────────────────────────────────────────────────────
+
+model LlmProvider {
+  id               Int        @id @default(autoincrement())
+  name             String     @unique
+  type             String
+  baseUrl          String?
+  credentialRef    String?
+  isEnabled        Boolean    @default(true)
+  priority         Int        @default(0)
+  monthlyBudgetUsd Float?
+  createdAt        DateTime   @default(now())
+  updatedAt        DateTime   @updatedAt
+  models           LlmModel[]
+
+  @@map("llm_providers")
+}
+
+model LlmModel {
+  id                    Int          @id @default(autoincrement())
+  name                  String       @unique
+  providerId            Int
+  provider              LlmProvider  @relation(fields: [providerId], references: [id])
+  capabilities          String[]
+  contextWindowTokens   Int?
+  inputPricePerMillion  Float?
+  outputPricePerMillion Float?
+  isDefault             Boolean      @default(false)
+  createdAt             DateTime     @default(now())
+  updatedAt             DateTime     @updatedAt
+  conversationPersonas  Persona[]    @relation("ConversationModel")
+  scoringPersonas       Persona[]    @relation("ScoringModel")
+
+  @@map("llm_models")
+}
+
 model Persona {
-  id                 Int              @id @default(autoincrement())
-  name               String
-  description        String?
-  systemPrompt       String
-  customInstructions String?
-  voiceStyleId       Int?
-  voiceStyle         VoiceStyle?      @relation(fields: [voiceStyleId], references: [id])
-  isDeleted          Boolean          @default(false)
-  createdById        Int?
-  updatedById        Int?
-  createdAt          DateTime         @default(now())
-  updatedAt          DateTime         @updatedAt
-  versions           PersonaVersion[]
-  scoreCriteria      ScoreCriterion[]
-  assignedUsers      User[]           @relation("AssignedPersona")
-  sessions           Session[]
+  id                  Int              @id @default(autoincrement())
+  name                String
+  description         String?
+  systemPrompt        String
+  customInstructions  String?
+  voiceStyleId        Int?
+  voiceStyle          VoiceStyle?      @relation(fields: [voiceStyleId], references: [id])
+  conversationModelId Int?
+  conversationModel   LlmModel?        @relation("ConversationModel", fields: [conversationModelId], references: [id])
+  scoringModelId      Int?
+  scoringModel        LlmModel?        @relation("ScoringModel", fields: [scoringModelId], references: [id])
+  isDeleted           Boolean          @default(false)
+  createdById         Int?
+  updatedById         Int?
+  createdAt           DateTime         @default(now())
+  updatedAt           DateTime         @updatedAt
+  versions            PersonaVersion[]
+  scoreCriteria       ScoreCriterion[]
+  assignedUsers       User[]           @relation("AssignedPersona")
+  sessions            Session[]
 
   @@map("personas")
 }

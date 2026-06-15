@@ -25,6 +25,9 @@ export const EnvSchema = z.object({
   LITELLM_BASE_URL: z.string().url(),
   LITELLM_API_KEY: z.string().min(1),
 
+  // Provider credential encryption (AES-256-GCM key source)
+  CREDENTIAL_ENCRYPTION_KEY: z.string().min(32),
+
   // Object storage
   STORAGE_PROVIDER: z.enum(['s3', 'azure']).default('s3'),
   S3_ENDPOINT: z.string().optional(),
