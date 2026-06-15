@@ -1,0 +1,134 @@
+version: '3.9'
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: learnium
+      POSTGRES_PASSWORD: learnium
+      POSTGRES_DB: learnium
+    ports:
+      - '5432:5432'
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U learnium']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - '6379:6379'
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:24
+    restart: unless-stopped
+    ports:
+      - '8123:8123'   # HTTP interface
+      - '9000:9000'   # native TCP
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+    environment:
+      CLICKHOUSE_DB: learnium
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_PASSWORD: ''
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -qO- http://localhost:8123/ping || exit 1']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: learnium
+      MINIO_ROOT_PASSWORD: learnium_secret
+    ports:
+      - '9002:9000'   # S3 API (offset to avoid conflict with clickhouse native)
+      - '9001:9001'   # MinIO console
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ['CMD-SHELL', 'mc ready local || exit 1']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  litellm:
+    image: ghcr.io/berriai/litellm:main-latest
+    restart: unless-stopped
+    ports:
+      - '4000:4000'
+    environment:
+      LITELLM_MASTER_KEY: sk-local-dev-master-key
+      DATABASE_URL: postgresql://learnium:learnium@postgres:5432/learnium
+      STORE_MODEL_IN_DB: 'True'
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -qO- http://localhost:4000/health || exit 1']
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  api:
+    build:
+      context: ../../
+      dockerfile: infra/docker/Dockerfile
+    restart: unless-stopped
+    environment:
+      NODE_ENV: development
+      APP_ROLE: api
+      PORT: 3000
+      DATABASE_URL: postgresql://learnium:learnium@postgres:5432/learnium
+      REDIS_URL: redis://redis:6379
+      CLICKHOUSE_URL: http://clickhouse:8123
+      CLICKHOUSE_DATABASE: learnium
+      CLICKHOUSE_USERNAME: default
+      CLICKHOUSE_PASSWORD: ''
+      LITELLM_BASE_URL: http://litellm:4000
+      LITELLM_API_KEY: sk-local-dev-master-key
+      STORAGE_PROVIDER: s3
+      S3_ENDPOINT: http://minio:9000
+      S3_BUCKET: learnium-content
+      S3_REGION: us-east-1
+      S3_ACCESS_KEY_ID: learnium
+      S3_SECRET_ACCESS_KEY: learnium_secret
+      JWT_ACCESS_SECRET: dev-access-secret-min-32-chars-here
+      JWT_REFRESH_SECRET: dev-refresh-secret-min-32-chars-here
+      CORS_ORIGINS: http://localhost:5173
+      LOG_LEVEL: debug
+      CREDENTIAL_VERIFIER: local
+    ports:
+      - '3000:3000'
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+      litellm:
+        condition: service_healthy
+    volumes:
+      - ../../apps/api/src:/app/apps/api/src  # hot-reload in dev
+
+volumes:
+  postgres_data:
+  redis_data:
+  clickhouse_data:
+  minio_data:

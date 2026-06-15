@@ -1,4 +1,10 @@
-/node_modules
-reference_app/
+node_modules/
+dist/
+.env
+*.env.local
 .DS_Store
 .worktrees/
+reference_app/
+*.log
+.turbo/
+*.tsbuildinfo

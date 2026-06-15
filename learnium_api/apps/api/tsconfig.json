@@ -1,0 +1,10 @@
+{
+  "extends": "@learnium/tsconfig/nestjs",
+  "compilerOptions": {
+    "outDir": "./dist",
+    "rootDir": "./src"
+  },
+  "include": ["src"],
+  "references": [{ "path": "../../packages/contracts" }],
+  "exclude": ["node_modules", "dist"]
+}
