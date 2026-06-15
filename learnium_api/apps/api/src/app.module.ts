@@ -6,6 +6,7 @@ import { ConfigModule } from './core/config/config.module';
 import { LoggerModule } from './core/logger/logger.module';
 import { DatabaseModule } from './core/database/database.module';
 import { RedisModule } from './core/redis/redis.module';
+import { LlmModule } from './core/llm/llm.module';
 import { CoreAuthModule } from './core/auth/core-auth.module';
 import { AllExceptionsFilter } from './core/errors/all-exceptions.filter';
 import { ResponseInterceptor } from './core/envelope/response.interceptor';
@@ -24,6 +25,7 @@ import type { Env } from './core/config/env.schema';
     LoggerModule,
     DatabaseModule,
     RedisModule,
+    LlmModule,
     CoreAuthModule,
     ThrottlerModule.forRootAsync({
       inject: [ConfigService],
