@@ -1,5 +1,6 @@
 import { Controller, Get } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { Public } from '../core/auth/decorators/public.decorator';
 import type { Env } from '../core/config/env.schema';
 
 interface ProbeResult {
@@ -17,11 +18,13 @@ interface ReadyResponse {
 export class HealthController {
   constructor(private readonly config: ConfigService<Env, true>) {}
 
+  @Public()
   @Get('health')
   liveness(): { status: string; timestamp: string } {
     return { status: 'ok', timestamp: new Date().toISOString() };
   }
 
+  @Public()
   @Get('ready')
   async readiness(): Promise<ReadyResponse> {
     const results = await Promise.allSettled([
