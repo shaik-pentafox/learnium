@@ -10,3 +10,5 @@ reference_app/
 *.tsbuildinfo
 CLAUDE.md
 .claude
+package-lock.json
+yarn.lock

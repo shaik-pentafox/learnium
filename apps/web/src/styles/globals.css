@@ -1,0 +1,197 @@
+@import 'tailwindcss';
+
+/* Dark theme is class-driven (.dark on <html>), not media-query driven. */
+@custom-variant dark (&:is(.dark *));
+
+/* ---------------------------------------------------------------------------
+ * Learnium design tokens — see docs/DESIGN.md
+ * "Linear" archetype: Zinc neutral + Indigo accent. Every token is defined in
+ * both :root (light) and .dark. Components reference the variable, never a hex.
+ * ------------------------------------------------------------------------- */
+
+:root {
+  --radius: 0.5rem; /* 8px base */
+
+  /* Surface & text */
+  --background: #ffffff;
+  --foreground: #18181b; /* zinc-900 */
+  --surface: #ffffff;
+  --surface-2: #fafafa; /* zinc-50 */
+  --card: #ffffff;
+  --card-foreground: #18181b;
+  --popover: #ffffff;
+  --popover-foreground: #18181b;
+  --muted: #f4f4f5; /* zinc-100 */
+  --muted-foreground: #52525b; /* zinc-600 */
+  --faint-foreground: #a1a1aa; /* zinc-400 */
+  --border: #e4e4e7; /* zinc-200 */
+  --input: #e4e4e7;
+  --ring: #6366f1; /* indigo-500 */
+
+  /* Brand accent (Indigo) */
+  --primary: #4f46e5; /* indigo-600 (darker for AA on white) */
+  --primary-foreground: #ffffff;
+  --primary-hover: #4338ca; /* indigo-700 */
+  --secondary: #f4f4f5;
+  --secondary-foreground: #18181b;
+  --accent: #eef2ff; /* indigo-50 — accent-soft */
+  --accent-foreground: #4f46e5;
+
+  /* Semantic status */
+  --success: #16a34a;
+  --success-soft: #dcfce7;
+  --warning: #d97706;
+  --warning-soft: #fef3c7;
+  --destructive: #dc2626;
+  --destructive-foreground: #ffffff;
+  --destructive-soft: #fee2e2;
+  --info: #2563eb;
+
+  /* Charts */
+  --chart-1: #4f46e5;
+  --chart-2: #8b5cf6;
+  --chart-3: #14b8a6;
+  --chart-4: #f59e0b;
+  --chart-5: #f43f5e;
+
+  /* Sidebar */
+  --sidebar: #ffffff;
+  --sidebar-foreground: #18181b;
+  --sidebar-primary: #4f46e5;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #eef2ff;
+  --sidebar-accent-foreground: #4f46e5;
+  --sidebar-border: #e4e4e7;
+  --sidebar-ring: #6366f1;
+}
+
+.dark {
+  --background: #09090b; /* zinc-950 */
+  --foreground: #fafafa; /* zinc-50 */
+  --surface: #18181b; /* zinc-900 */
+  --surface-2: #1f1f23;
+  --card: #18181b;
+  --card-foreground: #fafafa;
+  --popover: #18181b;
+  --popover-foreground: #fafafa;
+  --muted: #27272a; /* zinc-800 */
+  --muted-foreground: #a1a1aa; /* zinc-400 */
+  --faint-foreground: #52525b; /* zinc-600 */
+  --border: #27272a;
+  --input: #3f3f46; /* zinc-700 */
+  --ring: #6366f1;
+
+  --primary: #6366f1; /* indigo-500 */
+  --primary-foreground: #ffffff;
+  --primary-hover: #818cf8; /* indigo-400 */
+  --secondary: #27272a;
+  --secondary-foreground: #fafafa;
+  --accent: #312e81; /* indigo-900 */
+  --accent-foreground: #e0e7ff;
+
+  --success: #22c55e;
+  --success-soft: #052e16;
+  --warning: #f59e0b;
+  --warning-soft: #3a2a06;
+  --destructive: #ef4444;
+  --destructive-foreground: #ffffff;
+  --destructive-soft: #3a0a0a;
+  --info: #3b82f6;
+
+  --chart-1: #6366f1;
+  --chart-2: #a78bfa;
+  --chart-3: #2dd4bf;
+  --chart-4: #fbbf24;
+  --chart-5: #fb7185;
+
+  --sidebar: #18181b;
+  --sidebar-foreground: #fafafa;
+  --sidebar-primary: #6366f1;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #312e81;
+  --sidebar-accent-foreground: #e0e7ff;
+  --sidebar-border: #27272a;
+  --sidebar-ring: #6366f1;
+}
+
+/* Expose tokens to Tailwind utilities (bg-background, text-foreground, …). */
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-faint-foreground: var(--faint-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary-hover: var(--primary-hover);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+
+  --color-success: var(--success);
+  --color-success-soft: var(--success-soft);
+  --color-warning: var(--warning);
+  --color-warning-soft: var(--warning-soft);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-destructive-soft: var(--destructive-soft);
+  --color-info: var(--info);
+
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: calc(var(--radius) + 4px);
+
+  --font-sans:
+    'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono:
+    'JetBrains Mono', ui-monospace, 'SFMono-Regular', 'Menlo', monospace;
+}
+
+@layer base {
+  * {
+    border-color: var(--border);
+  }
+
+  body {
+    background-color: var(--background);
+    color: var(--foreground);
+    font-family: var(--font-sans);
+    font-feature-settings:
+      'cv11',
+      'ss01';
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* Data layer: numerics/IDs render in JetBrains Mono. */
+  .font-data {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+  }
+}
