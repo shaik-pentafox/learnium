@@ -41,7 +41,8 @@ feature/<name> ← one branch per feature below
 | ORM | Prisma (Postgres operational data) |
 | Analytics DB | **ClickHouse 24+** (`@clickhouse/client`) |
 | Cache / queues | Redis 7 + BullMQ |
-| LLM access | OpenAI SDK → LiteLLM gateway |
+| LLM access | **LangChain.js** chat models (from DB registry + encrypted BYOK creds; `.withFallbacks()`) — **no LiteLLM gateway** |
+| Roleplay engine | **LangGraph.js** `StateGraph` + `PostgresSaver` checkpointer (ports legacy `utils/new_chat.py`; horizontal-scale-safe) |
 | Auth | JWT access (15 min) + rotating refresh tokens |
 | WebSockets | NestJS raw `ws` gateways (no socket.io) |
 | Object storage | `StorageService` interface (S3 / Azure Blob) |
@@ -63,13 +64,16 @@ Priority: **core chat first**, everything else on top.
 | 5 | `feature/sessions` | ⬜ TODO | personas |
 | 6 | `feature/ws-chat` | ⬜ TODO | sessions ← **CORE** |
 | 7 | `feature/scoring` | ⬜ TODO | ws-chat |
-| 8 | `feature/llm-ops` | ⬜ TODO | scaffold |
-| 9 | `feature/voice` | ⬜ TODO | ws-chat |
-| 10 | `feature/files` | ⬜ TODO | auth |
-| 11 | `feature/clickhouse-analytics` | ⬜ TODO | sessions + scoring |
-| 12 | `feature/gamification` | ⬜ TODO | clickhouse-analytics |
+| 8 | `feature/llm-ops` | ⬜ TODO | scaffold (BYOK creds, LangChain model factory) |
+| 9 | `feature/files` | ⬜ TODO | auth |
+| 10 | `feature/clickhouse-analytics` | ⬜ TODO | sessions + scoring |
+| 11 | `feature/dashboards` | ⬜ TODO | clickhouse-analytics ← **CORE reporting** |
 
 **Statuses:** ⬜ TODO → 🔨 IN PROGRESS → ✅ MERGED
+
+**Deferred (future enhancement — not core):**
+- `feature/voice` — text-only for now. Two approaches when built (client-side STT/TTS over the text WS = no backend change; or server-side `/realtime/voice`). See E2E §9.
+- `feature/gamification` — badges, streaks, leaderboard, performance-score ranking.
 
 ---
 
@@ -124,7 +128,8 @@ POST /api/v1/auth/realtime/ticket
 - `POST /api/v1/users/import` — multipart XLSX/CSV → BullMQ job → `import_reports`
 - `GET /api/v1/users/import/:reportId` — job status + error file URL
 - `POST /api/v1/users/:id/avatar` — upload → storage → update avatarUrl
-- RBAC: `users:read` (Trainer), `users:write/delete` (Super Admin only)
+- **Hierarchy:** `User.supervisorId` self-ref. SuperAdmin creates Trainers + Trainees (maps trainee→trainer); Trainer creates Trainees under self. `POST /api/v1/users/:id/supervisor` (admin remap)
+- RBAC: `users:read` Admin=all / Trainer=supervisees; `users:write` Admin=all (create Trainer/Trainee) / Trainer=own trainees; `users:delete` Admin only
 - Audit columns via Prisma CLS extension
 
 **Test endpoints:**
@@ -149,7 +154,8 @@ GET /api/v1/users/import/:reportId
 - `GET /api/v1/personas/:id/versions` — version history
 - `GET /api/v1/personas/:id/versions/:v` — snapshot detail
 - `POST /api/v1/personas/:id/enhance` — SSE streaming LLM prompt enhancement
-- `GET /api/v1/personas/my` — personas accessible to current user
+- **Ownership/publish:** `Persona.ownerId` (trainer) + `isPublished`/`publishedVersion`; `POST /personas/:id/publish` + `/unpublish` + `/test` (draft roleplay-test, owner only)
+- `GET /api/v1/personas/my` — trainee: **published** personas of own trainer only (no public)
 - `GET /api/v1/roles` — list roles
 
 **Test endpoints:**
@@ -189,9 +195,9 @@ This is the primary deliverable. Everything before is setup for this.
 
 - `POST /api/v1/auth/realtime/ticket` already done in F2; verified here
 - `WS /api/v1/realtime/chat?ticket=<token>` — the chat gateway
-- Redis session registry: `session:{uid}` → status, personaId, modelId, lastMessageId, pod, lastSeen (TTL 24h)
-- LiteLLM `LlmClientService`: streaming roleplay turns via OpenAI SDK
-- `RoleplaySession` state machine per WebSocket connection
+- Redis session registry: `session:{uid}` → status, personaId, modelId, lastMessageId, pod, lastSeen (TTL 24h) — liveness/routing only
+- **LangGraph `StateGraph` roleplay engine** (`core/llm/roleplay-graph.ts`, ports legacy `utils/new_chat.py`); streamed via `graph.stream()`; models built by `ModelFactoryService` (LangChain, from registry + decrypted BYOK creds)
+- **`PostgresSaver` checkpointer** (`@langchain/langgraph-checkpoint-postgres`), `thread_id = session.uid` — durable conversation state, any pod resumes (fixes legacy in-memory `MemorySaver`)
 - System prompt: built from persona `customInstructions`; **no hardcoded client names**
 - [CONVERSATION_ENDED] sentinel: triggers session end on server side
 - Token streaming: `{type:"token", delta:"..."}` per chunk
@@ -228,35 +234,27 @@ GET /api/v1/sessions/:uid   (verify scores populated)
 ---
 
 ### F8: `feature/llm-ops`
-- Prisma migrations: `llm_providers`, `llm_models`
-- `GET/POST /api/v1/llm/providers` — registry CRUD (ADMIN)
+- Prisma migrations: `llm_providers`, `llm_models`, **`llm_credentials`** (BYOK)
+- `core/crypto`: AES-256-GCM (`MASTER_ENCRYPTION_KEY`); `ModelFactoryService` builds LangChain models from registry + decrypted creds
+- `GET/POST /api/v1/llm/providers` — registry CRUD (ADMIN); types incl. `local` (vLLM/Ollama, no key)
 - `PATCH/DELETE /api/v1/llm/providers/:id`
-- `GET/POST /api/v1/llm/models`
-- `PATCH /api/v1/llm/models/:id`
-- `POST /api/v1/llm/models/:id/promote` — set as default; `sync-llm-registry` BullMQ job
-- `GET /api/v1/llm/usage` — reads from ClickHouse `llm_events`
+- **`GET/POST /api/v1/llm/providers/:id/credentials`** — BYOK keys, **write-only/masked**; Super Admin configures once for all users
+- `PATCH/DELETE /api/v1/llm/credentials/:id`, `POST /api/v1/llm/credentials/:id/verify`
+- `GET/POST /api/v1/llm/models` (+ `alias`), `PATCH /api/v1/llm/models/:id`
+- `POST /api/v1/llm/models/:id/promote` — set default; `refresh-model-cache` (Redis pub/sub, **no gateway**)
+- `GET /api/v1/llm/usage` — ClickHouse `llm_events`, incl. **by-provider/model cost**
 - `GET /api/v1/llm/usage/export` — ClickHouse → exceljs → storage → pre-signed URL
 
 ---
 
-### F9: `feature/voice`
-- `WS /api/v1/realtime/voice?ticket=<token>&provider=gemini|azure|openai`
-- `VoiceProvider` interface: `connect / sendAudio / onAudio / interrupt / end`
-- `GeminiLiveProvider` implementation
-- `AzureVoiceLiveProvider` implementation
-- Binary PCM16 frames + JSON control frames
-- Session end → same scoring path as F7
-
----
-
-### F10: `feature/files`
+### F9: `feature/files`
 - `POST /api/v1/files/upload` — multipart; MIME + size validation; returns `{fileId, url}`
 - `GET /api/v1/files/:fileId` — redirect to pre-signed download URL (60s TTL)
 - `DELETE /api/v1/files/:fileId` — hard-delete from storage + DB record
 
 ---
 
-### F11: `feature/clickhouse-analytics`
+### F10: `feature/clickhouse-analytics`
 - ClickHouseService fully wired: `llm_events`, `session_events`, `telemetry_events`
 - `flush-llm-events` + `flush-telemetry` BullMQ jobs (every 30s)
 - `GET /api/v1/analytics/overview`
@@ -267,15 +265,19 @@ GET /api/v1/sessions/:uid   (verify scores populated)
 
 ---
 
-### F12: `feature/gamification`
-- Prisma migrations: `badge_definitions`, `user_badges`, `user_streaks`, `user_performance_scores`
-- Seed 17 badges
-- `compute-performance-scores` job (reads ClickHouse `session_events` → writes Postgres)
-- `award-badges` job
-- `update-streaks` job
-- `weekly-ranking-badges` cron
-- `GET /api/v1/leaderboard` + `GET /api/v1/leaderboard/me`
-- Badge endpoints: catalog, earned, unseen/seen
+### F11: `feature/dashboards` ← CORE reporting
+- `GET /api/v1/dashboard/admin` — org-wide: trainee performance, completion, **token usage + cost by provider/model**, per-trainer rollups
+- `GET /api/v1/dashboard/trainer` — own trainees: scores, completion, activity, at-risk
+- `GET /api/v1/dashboard/me` — trainee: own sessions, per-criterion scores, progress, practice time
+- Reads ClickHouse `session_events`/`llm_events` + Postgres; service-level supervisor scoping
+
+---
+
+### Deferred (future enhancement — NOT core)
+
+**`feature/voice`** — text-only for now. Two approaches when built (E2E §9): client-side STT/TTS over the text WS (no backend change), or server-side `/realtime/voice` (`VoiceProvider`: Gemini Live / Azure VoiceLive / OpenAI Realtime / OSS LiveKit). Scoring path is transport-agnostic (consumes text transcript) so either drops in.
+
+**`feature/gamification`** — `badge_definitions`/`user_badges`/`user_streaks`/`user_performance_scores`, 17 badges, `compute-performance-scores`/`award-badges`/`update-streaks`/`weekly-ranking-badges` jobs, `GET /leaderboard*` + `/badges*` (global scope).
 
 ---
 
@@ -399,10 +401,13 @@ Last completed feature: — (starting from scratch)
 Next feature to build: F1 — feature/scaffold
 Blocked on: nothing
 Notes: Project kicked off. E2E_BACKEND_PLAN.md is finalized.
-       Stack confirmed: NestJS 11 + Fastify, npm workspaces, Prisma, ClickHouse, Redis, BullMQ, LiteLLM.
+       Stack confirmed: NestJS 11 + Fastify, npm workspaces, Prisma, ClickHouse, Redis, BullMQ,
+         LangChain.js + LangGraph.js (PostgresSaver checkpointer) — NO LiteLLM gateway.
        No org groupings (no Groups/Cohorts/Domains).
        No content library (simple /files upload/download only).
-       Leaderboard is global only.
+       Persona hierarchy: SuperAdmin→Trainer→Trainee; trainees use only their trainer's PUBLISHED personas; no public.
+       BYOK: SuperAdmin configs provider creds once (encrypted); future local vLLM/Ollama models selectable.
+       Core dashboards (admin/trainer/trainee). Leaderboard + gamification + voice = future. Text-only for now.
 ```
 
 ---
@@ -417,3 +422,8 @@ Notes: Project kicked off. E2E_BACKEND_PLAN.md is finalized.
 | 2026-06-15 | npm workspaces instead of pnpm | Team preference |
 | 2026-06-15 | Global-only leaderboard | No group/cohort scoping |
 | 2026-06-15 | Build core chat (WS) first | Core product value is roleplay; everything else secondary |
+| 2026-06-15 | **LiteLLM → LangChain.js + LangGraph.js** (in-app) | Legacy already runs LangGraph; `PostgresSaver` checkpointer fixes horizontal scale; one less infra component (no gateway). JS LangGraph in NestJS; Python service only if JS lags |
+| 2026-06-15 | **Persona hierarchy** (owner + publish + supervisor), no public | SuperAdmin→Trainer→Trainee; trainer owns/tests/publishes personas; trainees use only their trainer's published ones |
+| 2026-06-15 | **Dashboards core; leaderboard + badges → future** | Reporting need (perf + token-usage-by-provider) ≠ gamification; defer competitive layer |
+| 2026-06-15 | **BYOK = SuperAdmin configures once** (central, encrypted) | Not per-user keys; trainers/trainees consume; future local models selectable |
+| 2026-06-15 | **Voice deferred, text-only** | Two approaches kept open (client STT/TTS over text WS, or server realtime); scoring path is transport-agnostic |

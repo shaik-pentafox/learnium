@@ -8,3 +8,5 @@ reference_app/
 *.log
 .turbo/
 *.tsbuildinfo
+CLAUDE.md
+.claude

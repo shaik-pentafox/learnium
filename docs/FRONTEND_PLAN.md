@@ -1,6 +1,8 @@
 # ALFA Learnium — Frontend Implementation Plan (React)
 
-Companion to [PRODUCT_PLAN.md](./PRODUCT_PLAN.md) and [BACKEND_PLAN.md](./BACKEND_PLAN.md). The frontend is a **React SPA** living at `apps/web` in the same pnpm monorepo, consuming the typed contracts from `packages/contracts` and the `/api/v1` backend.
+Companion to [PRODUCT_PLAN.md](./PRODUCT_PLAN.md), [BACKEND_PLAN.md](./BACKEND_PLAN.md), and [DEV_STRATEGY.md](./DEV_STRATEGY.md) (authoritative). The frontend is a **React SPA** living at `apps/web` in the same **npm-workspaces** monorepo, consuming the typed contracts from `packages/contracts` and the `/api/v1` backend.
+
+> **Scope alignment with DEV_STRATEGY:** core is **text roleplay over WebSocket**. Voice (§F3) and **gamification** (leaderboard/badges/streaks, §F4) are **deferred** — built only after the core chat + dashboards loop ships. Persona visibility follows the **owner + publish** model (trainee sees only their trainer's *published* personas), not `isPublic`. Gamification screens/components below stay in the plan as the deferred target, not v1 work.
 
 **Design bar: clean and professional.** Dense-but-breathable admin surfaces, restrained color, consistent spacing/typography, dark + light themes. Animation is purposeful (state transitions, voice feedback), never decorative noise.
 
@@ -13,7 +15,7 @@ Companion to [PRODUCT_PLAN.md](./PRODUCT_PLAN.md) and [BACKEND_PLAN.md](./BACKEN
 | Framework | React 19 + Vite 6 | SPA; SSR not needed for an authenticated tool |
 | Language | TypeScript 5.x strict | shared tsconfig base from the monorepo |
 | Routing | TanStack Router | fully typed routes, search-param state (filters/pagination in the URL), route-level auth guards, code splitting per route |
-| Server state | TanStack Query v5 | queries/mutations, optimistic updates, invalidation; no server data in Zustand |
+| Server state | **TanStack Query v5** ([docs](https://tanstack.com/query/latest)) | the only home for server data — queries/mutations, optimistic updates, cache invalidation, retries, `staleTime`/`gcTime` policy; centralized `queryKeys` factory; mutation success/error → react-hot-toast; no server data in Zustand |
 | Client state | Zustand | auth/session slice, UI slice (sidebar, theme, modals), live-session slice (WS status, audio state); small focused stores, immutable updates |
 | HTTP | Axios | single instance; interceptors: auth header, envelope unwrap, 401 → refresh-token rotation + replay, error normalization |
 | Forms | react-hook-form + `@hookform/resolvers/zod` | same Zod schemas as the backend via `packages/contracts` — client and server validate identically |
@@ -22,7 +24,8 @@ Companion to [PRODUCT_PLAN.md](./PRODUCT_PLAN.md) and [BACKEND_PLAN.md](./BACKEN
 | Animation | **motion-primitives** + Framer Motion | page/list transitions, micro-interactions |
 | Rich/marketing accents | **21st.dev, Aceternity UI, ReactBits, shadcnspace** | reference catalogs — copy, strip to the design tokens, keep it professional; login/empty states/dashboard accents only |
 | Voice & agent UI | **ElevenLabs UI** (`@elevenlabs/ui`) | waveform visualizers, voice-chat surfaces, audio playback — base for the roleplay voice session screen (transport stays our own WS, not ElevenLabs services) |
-| Loaders | math-curve-loaders gallery | one or two picked as the standard loader set, tokenized to theme colors |
+| Skeletons / loaders | **Boneyard** ([boneyard.vercel.app](https://boneyard.vercel.app/overview)) | content-shaped skeleton loaders for tables, cards, dashboards, chat history; tokenized to theme colors (`--muted` base, shimmer in brand accent); the default for any data-fetch wait |
+| Toasts / notifications | **react-hot-toast** | global `<Toaster>` in `__root.tsx`; mutation feedback, normalized API errors, connection/reconnect advisories; hosts custom JSX (deferred `BadgeToast` celebrate animation renders as a custom toast) |
 | Charts | Recharts (shadcn charts) | analytics + LLM cost dashboards |
 | Icons | lucide-react | shadcn default |
 | WS client | native WebSocket wrapper | typed protocol from `packages/contracts`; ticket auth, heartbeat, exponential-backoff reconnect implementing the backend resume contract |
@@ -46,61 +49,71 @@ Registry-compatible sources (Aceternity, motion-primitives, shadcnspace) get wir
 ```
 apps/web/
 ├── src/
-│   ├── main.tsx                    # providers: router, query client, theme
+│   ├── main.tsx                    # provider tree: QueryClientProvider → RouterProvider
+│   │                               #   → ThemeProvider → react-hot-toast <Toaster>
 │   ├── routes/                     # TanStack Router file-based routes
-│   │   ├── __root.tsx              # shell: role-aware sidebar, header, toaster
+│   │   ├── __root.tsx              # shell: role-aware sidebar, header; mounts <Toaster>
 │   │   ├── login.tsx
 │   │   ├── _auth/                  # authenticated layout (route guard)
 │   │   │   ├── dashboard.tsx       # role-aware: trainee KPIs vs trainer vs admin
-│   │   │   ├── leaderboard/        # global / my-trainees leaderboard, own rank, period switcher
-│   │   │   ├── badges/             # badge shelf, catalog, unread notifications
 │   │   │   ├── users/              # list, detail drawer, create/edit, bulk import
 │   │   │   ├── personas/           # list, builder (instructions, scoring, voice,
-│   │   │   │                       #   model roles), version history, testing playground (E3)
-│   │   │   ├── roleplay/           # session launcher, chat session, voice session,
-│   │   │   │                       #   feedback & score reveal
+│   │   │   │                       #   model roles), version history, publish, playground (E3)
+│   │   │   ├── roleplay/           # session launcher, chat session,
+│   │   │   │                       #   feedback & score reveal  (voice = deferred)
 │   │   │   ├── analytics/          # user/persona dashboards, exports
 │   │   │   ├── llm-ops/            # provider/model registry + BYOK key mgmt (E6), usage & cost
-│   │   │   └── settings/           # profile, roles admin
+│   │   │   ├── settings/           # profile, roles admin
+│   │   │   ├── leaderboard/        # DEFERRED (gamification) — global / my-trainees, period switcher
+│   │   │   └── badges/             # DEFERRED (gamification) — badge shelf, catalog, notifications
 │   ├── components/
 │   │   ├── ui/                     # vendored shadcn primitives (owned, themed)
 │   │   ├── data-table/             # tablecn-based server-side table kit
-│   │   ├── voice/                  # ElevenLabs-UI-based waveform, mic control,
-│   │   │                           #   speaking indicator, audio player
-│   │   ├── gamification/           # see §3.x below
-│   │   │   ├── LeaderboardTable.tsx
-│   │   │   ├── LeaderboardRow.tsx   # rank, avatar, score bar, badge chips
-│   │   │   ├── OwnRankCard.tsx      # pinned own-position card
-│   │   │   ├── PerformanceScoreCard.tsx  # score ring + component breakdown
-│   │   │   ├── BadgeShelf.tsx       # earned badges row with overflow "+N"
-│   │   │   ├── BadgeCatalog.tsx     # full grid: earned/locked states
-│   │   │   ├── BadgeCard.tsx        # icon, tier color, name, earned date
-│   │   │   ├── BadgeToast.tsx       # badge-earned celebration (Framer Motion)
-│   │   │   ├── StreakCalendar.tsx   # GitHub heat-map style calendar
-│   │   │   ├── StreakCounter.tsx    # current streak with fire icon
-│   │   │   └── PeriodSwitcher.tsx  # weekly / monthly / all-time tabs
+│   │   ├── feedback/               # Boneyard skeletons (TableSkeleton, CardSkeleton,
+│   │   │   │                       #   DashboardSkeleton, ChatHistorySkeleton),
+│   │   │   │                       #   empty states, error states, route fallback
+│   │   │   └── toast.tsx           # react-hot-toast wrappers + custom toast renderers
 │   │   ├── charts/                 # themed Recharts wrappers
-│   │   └── feedback/               # loaders (math-curve set), empty states, errors
-│   ├── features/                   # feature logic co-located per domain
-│   │   └── <domain>/               # api.ts (axios calls), queries.ts (TanStack),
+│   │   ├── voice/                  # DEFERRED — ElevenLabs-UI waveform, mic, audio player
+│   │   └── gamification/           # DEFERRED — LeaderboardTable/Row, OwnRankCard,
+│   │                               #   PerformanceScoreCard, BadgeShelf/Catalog/Card,
+│   │                               #   BadgeToast (custom react-hot-toast), StreakCalendar/Counter,
+│   │                               #   PeriodSwitcher
+│   ├── features/                   # feature logic co-located per domain (mirrors backend modules)
+│   │   └── <domain>/               # api.ts      — axios calls (envelope-unwrapped)
+│   │                               # queries.ts  — TanStack useQuery/useMutation hooks
+│   │                               # keys.ts     — domain query-key factory
 │   │                               # components/, hooks/
-│   ├── stores/                     # zustand: auth.ts, ui.ts, live-session.ts
+│   ├── stores/                     # zustand (client state only): auth.ts, ui.ts, live-session.ts
 │   ├── lib/
-│   │   ├── api-client.ts           # axios instance + interceptors
+│   │   ├── query-client.ts         # QueryClient singleton: default staleTime/gcTime,
+│   │   │                           #   retry policy, global onError → toast
+│   │   ├── query-keys.ts           # root query-key namespaces (composed by feature keys.ts)
+│   │   ├── api-client.ts           # axios instance + interceptors (auth, envelope, 401-refresh)
+│   │   ├── toast.ts                # react-hot-toast helpers: success/error/promise, themed options
 │   │   ├── ws-client.ts            # typed WS wrapper, reconnect + resume
-│   │   ├── audio/                  # worklets, PCM16 encode/decode, playback queue
+│   │   ├── audio/                  # DEFERRED — worklets, PCM16 encode/decode, playback queue
 │   │   └── utils.ts
 │   └── styles/                     # tailwind entry, theme tokens (CSS vars)
 └── tests/                          # vitest unit + Playwright e2e
 ```
 
-Rules: routes compose features; features own their API calls and queries; `components/` is domain-free; server data lives in TanStack Query only; Zustand never caches API responses.
+Rules: routes compose features; features own their API calls, query hooks, and **query-key factories**; `components/` is domain-free; **server data lives in TanStack Query only** (Zustand never caches API responses); every fetch wait renders a **Boneyard skeleton**, every mutation result surfaces through **react-hot-toast**.
 
 ---
 
 ## 3. Design System
 
-- **Tokens first**: neutral base palette (zinc/slate), one brand accent, semantic status colors; spacing/radius/typography scales as CSS variables; dark + light from day one.
+**Design direction (chosen): "Linear" archetype — Zinc + Violet/Indigo.** Set `globals.css` token set in Phase F0. **Both dark and light themes are first-class — neither is an afterthought.** Define every token (`--background`, `--surface`, `--border`, `--foreground`, `--muted`, `--primary`, status colors) under both `:root` (light) and `.dark`, with shadcn CSS-vars theming:
+- **Dark**: `zinc-950` bg / `zinc-900` surface, `zinc-800` borders, brand accent `indigo-500`.
+- **Light**: `white`/`zinc-50` bg / `white` surface, `zinc-200` borders, `zinc-900` text, brand accent `indigo-600` (one step darker for AA contrast on light).
+- Borders carry structure in both themes (subtle `1px` over drop shadows); accent used sparingly (active-tab glow, primary CTA, deferred `BadgeToast`).
+
+Theme is toggleable and persisted (UI Zustand slice → `localStorage`), defaults to system (`prefers-color-scheme`), applied via the `.dark` class on `<html>` with no flash on load (inline pre-hydration script). Reference archetypes if the bar shifts: **Vercel** (stark black/white, blue accent), **Stripe** (slate undertone, soft shadows, emerald/cobalt accent). Whichever is picked, external snippets are stripped to `var(--primary)` / `var(--radius)` before merge — and verified in **both** themes.
+
+- **Tokens first**: neutral base palette (zinc default; slate if the warmer Stripe direction is taken), one brand accent, semantic status colors; spacing/radius/typography scales as CSS variables; dark + light from day one.
+- **Data-layer typography**: **JetBrains Mono** for all numeric/data surfaces — global rank (`12 / 470`), token counts, latency, performance scores — monospace prevents layout jitter on live updates. **Inter** for everything else, disciplined weights (`font-normal` body, `font-medium` labels, bold reserved for page titles).
+- **Density**: shadcn `Card` with reduced padding on dashboards; LLM-ops Recharts hide gridlines/axes until hover; performance-score ring = crisp SVG donut (`zinc-800` track, accent progress, score in JetBrains Mono).
 - **Typography**: Inter (UI) + JetBrains Mono (IDs, tokens, logs). Tight, consistent hierarchy — page title / section / body / caption.
 - **Layout**: fixed sidebar navigation (collapsible), top bar with breadcrumbs + user menu; content max-width on forms, full-bleed on tables/dashboards.
 - **Component discipline**: every external snippet (21st.dev / Aceternity / ReactBits) is re-themed to tokens before merge — no one-off colors, shadows, or fonts. Flashy effects allowed only on login and empty states, and subtle.
@@ -153,8 +166,9 @@ Route guards in TanStack Router check `user.role` from the auth store; forbidden
 
 - **Auth flow**: access token in memory (Zustand, never localStorage), refresh token in httpOnly cookie; axios interceptor refreshes on 401 and replays; router guard redirects to login; idle logout.
 - **Realtime resume**: WS drop → auto-reconnect with session id + last message id (backend contract §3.4 of BACKEND_PLAN); UI shows degraded-connection banner, never loses transcript.
-- **Errors**: normalized from the envelope; field errors land on forms, others in toasts; error boundary per route with retry.
-- **Loading**: route-level skeletons for tables/dashboards; math-curve loader reserved for full-screen and LLM-wait moments.
+- **Data layer (TanStack Query)**: every server read is a `useQuery`; every write a `useMutation` that invalidates the affected query keys (or applies an optimistic update + rollback). Query keys come from per-feature `keys.ts` factories composed off `lib/query-keys.ts` — no inline string keys. `QueryClient` defaults (`staleTime`, `gcTime`, retry, global `onError`) live in `lib/query-client.ts`. URL search params (TanStack Router) are the source of truth for table pagination/filter/sort and feed straight into query keys, so refresh/bookmark restore state.
+- **Errors**: normalized from the envelope; field errors land on forms via react-hook-form, everything else via **react-hot-toast** (`toast.error`); per-route error boundary with retry; the query client's global `onError` is the backstop.
+- **Loading**: **Boneyard** content-shaped skeletons for tables, cards, dashboards, and chat history (route-level + per-query `isPending`); inline spinner only for button-bound mutations; `toast.promise` for long async (export, bulk import) and LLM-wait moments.
 - **Permissions**: role from the session drives nav visibility and action gating (see §4 table); server enforces on every request.
 - **Badge notifications**: on app load and after session end, poll `/badges/me/unseen`; new badges trigger `BadgeToast` (Framer Motion celebrate animation, 4 s duration) and update the sidebar badge-count dot. PATCH `/badges/me/seen` on dismiss.
 - **i18n-ready**: strings centralized from day one, even if v1 ships English-only.
