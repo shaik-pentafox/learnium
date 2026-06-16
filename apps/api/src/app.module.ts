@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { APP_FILTER, APP_INTERCEPTOR } from '@nestjs/core';
 import { ThrottlerModule } from '@nestjs/throttler';
+import { ScheduleModule } from '@nestjs/schedule';
 import { ConfigService } from '@nestjs/config';
 import { ConfigModule } from './core/config/config.module';
 import { LoggerModule } from './core/logger/logger.module';
@@ -23,6 +24,7 @@ import type { Env } from './core/config/env.schema';
 @Module({
   imports: [
     ConfigModule,
+    ScheduleModule.forRoot(),
     LoggerModule,
     DatabaseModule,
     RedisModule,

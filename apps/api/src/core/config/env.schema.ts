@@ -52,6 +52,9 @@ export const EnvSchema = z.object({
   // Worker
   WORKER_CONCURRENCY: z.coerce.number().int().positive().default(5),
 
+  // Sessions — idle ACTIVE sessions older than this are reaped → ABANDONED
+  SESSION_IDLE_TIMEOUT_MINUTES: z.coerce.number().int().positive().default(30),
+
   // Observability
   LOG_LEVEL: z.enum(['trace', 'debug', 'info', 'warn', 'error', 'fatal']).default('info'),
   OTEL_EXPORTER_OTLP_ENDPOINT: z.string().optional(),
