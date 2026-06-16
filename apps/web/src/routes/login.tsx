@@ -3,10 +3,11 @@ import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import { useState } from 'react'
-import { apiPost } from '@/lib/api-client'
-import { useAuthStore, type AuthUser } from '@/stores/auth'
+import { login } from '@/services/auth'
+import { useAuthStore } from '@/stores/auth'
 import { notify } from '@/lib/toast'
 import { Button } from '@/components/ui/button'
+import { Logo } from '@/components/logo'
 import { ShaderBackground } from '@/components/shader-background'
 
 export const Route = createFileRoute('/login')({
@@ -19,20 +20,14 @@ export const Route = createFileRoute('/login')({
 })
 
 const loginSchema = z.object({
-  email: z.string().email('Enter a valid email'),
+  username: z.string().min(1, 'Username is required'),
   password: z.string().min(1, 'Password is required'),
 })
 
 type LoginInput = z.infer<typeof loginSchema>
 
-interface LoginResponse {
-  user: AuthUser
-  accessToken: string
-}
-
 function LoginPage() {
   const navigate = useNavigate()
-  const setAuth = useAuthStore((s) => s.setAuth)
   const [submitting, setSubmitting] = useState(false)
   const {
     register,
@@ -43,12 +38,8 @@ function LoginPage() {
   async function onSubmit(values: LoginInput) {
     setSubmitting(true)
     try {
-      const { user, accessToken } = await apiPost<LoginResponse>(
-        '/auth/login',
-        values,
-      )
-      setAuth(user, accessToken)
-      notify.success(`Welcome back, ${user.name}`)
+      await login(values)
+      notify.success('Welcome back')
       await navigate({ to: '/dashboard' })
     } catch (error) {
       notify.error(error)
@@ -58,31 +49,25 @@ function LoginPage() {
   }
 
   return (
-    <div className="relative grid min-h-svh place-items-center overflow-hidden bg-background px-4">
+    <div className="relative grid min-h-svh place-items-center overflow-hidden px-4">
       <ShaderBackground />
-      <div className="w-full max-w-sm rounded-lg border border-border bg-surface/95 p-8 shadow-lg backdrop-blur-sm">
+      <div className="relative z-10 w-full max-w-sm rounded-lg border border-border bg-surface/95 p-8 shadow-lg backdrop-blur-sm">
         <div className="mb-6 space-y-1">
-          <div
-            className="mb-4 h-8 w-8 rounded-md"
-            style={{
-              background:
-                'linear-gradient(135deg, var(--primary), var(--chart-2))',
-            }}
-          />
-          <h1 className="text-2xl font-semibold tracking-tight">Learnium</h1>
+          <Logo className="mb-4 size-9" />
+          <h1 className="font-brand text-3xl">Learnium</h1>
           <p className="text-sm text-muted-foreground">
             Sign in to your training workspace.
           </p>
         </div>
 
         <form onSubmit={handleSubmit(onSubmit)} className="space-y-4" noValidate>
-          <Field label="Email" error={errors.email?.message}>
+          <Field label="Username" error={errors.username?.message}>
             <input
-              type="email"
-              autoComplete="email"
+              type="text"
+              autoComplete="username"
               className="h-11 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-ring"
-              placeholder="you@company.com"
-              {...register('email')}
+              placeholder="your.username"
+              {...register('username')}
             />
           </Field>
 
@@ -107,7 +92,7 @@ function LoginPage() {
         </form>
 
         <p className="mt-4 text-center text-xs text-faint-foreground">
-          Mock login — use any email + password{' '}
+          Dev mock — any username + password{' '}
           <span className="font-data">password</span>
         </p>
       </div>

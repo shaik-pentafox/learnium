@@ -3,7 +3,6 @@ import axios, {
   type AxiosInstance,
   type AxiosRequestConfig,
 } from 'axios'
-import type { PaginationMeta } from '@learnium/contracts'
 import { useAuthStore } from '@/stores/auth'
 
 /** Normalized error surfaced to the UI (from the API error envelope). */
@@ -14,11 +13,18 @@ export interface ApiError {
   details?: unknown
 }
 
+/** Backend envelope `meta` is always `{ requestId, timestamp }`. Pagination
+ *  counts (total/page/limit/totalPages) live inside `data`, not here. */
+interface EnvelopeMeta {
+  requestId?: string
+  timestamp?: string
+}
+
 interface SuccessEnvelope<T> {
   status: 'success'
   message: string
   data: T
-  meta?: PaginationMeta
+  meta?: EnvelopeMeta
 }
 
 interface ErrorEnvelope {
@@ -30,7 +36,6 @@ interface ErrorEnvelope {
 
 const http: AxiosInstance = axios.create({
   baseURL: '/api/v1',
-  withCredentials: true, // refresh token rides in an httpOnly cookie
   headers: { 'Content-Type': 'application/json' },
 })
 
@@ -47,15 +52,18 @@ http.interceptors.request.use((config) => {
 let refreshPromise: Promise<string | null> | null = null
 
 async function refreshAccessToken(): Promise<string | null> {
+  const refreshToken = useAuthStore.getState().refreshToken
+  if (!refreshToken) {
+    useAuthStore.getState().clear()
+    return null
+  }
   try {
-    const res = await axios.post<SuccessEnvelope<{ accessToken: string }>>(
-      '/api/v1/auth/refresh',
-      {},
-      { withCredentials: true },
-    )
-    const token = res.data.data.accessToken
-    useAuthStore.getState().setAccessToken(token)
-    return token
+    const res = await axios.post<
+      SuccessEnvelope<{ accessToken: string; refreshToken: string }>
+    >('/api/v1/auth/refresh', { refreshToken })
+    const tokens = res.data.data
+    useAuthStore.getState().setTokens(tokens)
+    return tokens.accessToken
   } catch {
     useAuthStore.getState().clear()
     return null
@@ -117,14 +125,6 @@ export async function apiGet<T>(
 ): Promise<T> {
   const res = await http.get<SuccessEnvelope<T>>(url, config)
   return res.data.data
-}
-
-export async function apiGetPaginated<T>(
-  url: string,
-  config?: AxiosRequestConfig,
-): Promise<{ items: T[]; meta: PaginationMeta }> {
-  const res = await http.get<SuccessEnvelope<T[]>>(url, config)
-  return { items: res.data.data, meta: res.data.meta as PaginationMeta }
 }
 
 export async function apiPost<T>(

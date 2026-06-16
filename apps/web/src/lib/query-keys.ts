@@ -4,6 +4,7 @@
  */
 export const queryKeys = {
   auth: ['auth'] as const,
+  sessions: ['sessions'] as const,
   users: ['users'] as const,
   personas: ['personas'] as const,
   roleplay: ['roleplay'] as const,

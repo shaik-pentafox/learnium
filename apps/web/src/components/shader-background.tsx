@@ -125,11 +125,11 @@ export function ShaderBackground({ className }: ShaderBackgroundProps) {
     const resizeObserver = new ResizeObserver(resize)
     resizeObserver.observe(container)
 
-    const clock = new THREE.Clock()
+    const start = performance.now()
     let frameId = 0
 
     function renderFrame() {
-      uniforms.u_time.value = clock.getElapsedTime()
+      uniforms.u_time.value = (performance.now() - start) / 1000
       renderer.render(scene, camera)
     }
 
@@ -157,7 +157,7 @@ export function ShaderBackground({ className }: ShaderBackgroundProps) {
     <div
       ref={containerRef}
       aria-hidden="true"
-      className={cn('pointer-events-none absolute inset-0 -z-10', className)}
+      className={cn('pointer-events-none absolute inset-0 z-0', className)}
     />
   )
 }

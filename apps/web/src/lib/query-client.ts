@@ -17,7 +17,7 @@ export function createQueryClient(): QueryClient {
         staleTime: FIVE_MINUTES,
         gcTime: TEN_MINUTES,
         retry: (failureCount, error) => {
-          const status = (error as ApiError)?.httpStatus
+          const status = (error as unknown as ApiError)?.httpStatus
           if (status === 401 || status === 403 || status === 404) return false
           return failureCount < 2
         },

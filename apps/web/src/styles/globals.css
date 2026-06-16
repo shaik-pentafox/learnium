@@ -3,6 +3,15 @@
 /* Dark theme is class-driven (.dark on <html>), not media-query driven. */
 @custom-variant dark (&:is(.dark *));
 
+/* Brand display face — used for the product name only (see .font-brand). */
+@font-face {
+  font-family: 'Aldo';
+  src: url('../assets/fonts/aldo-pc.ttf') format('truetype');
+  font-weight: normal;
+  font-style: normal;
+  font-display: swap;
+}
+
 /* ---------------------------------------------------------------------------
  * Learnium design tokens — see docs/DESIGN.md
  * "Linear" archetype: Zinc neutral + Indigo accent. Every token is defined in
@@ -193,5 +202,11 @@
   .font-data {
     font-family: var(--font-mono);
     font-variant-numeric: tabular-nums;
+  }
+
+  /* Brand: the product name "Learnium" only, in the Aldo display face. */
+  .font-brand {
+    font-family: 'Aldo', var(--font-sans);
+    letter-spacing: 0.01em;
   }
 }
