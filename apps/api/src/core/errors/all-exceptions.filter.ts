@@ -7,6 +7,7 @@ import {
   Logger,
 } from '@nestjs/common';
 import { FastifyReply, FastifyRequest } from 'fastify';
+import { Prisma } from '@prisma/client';
 import { ErrorCode } from '@learnium/contracts';
 import { DomainException } from './domain.errors';
 
@@ -45,6 +46,21 @@ export class AllExceptionsFilter implements ExceptionFilter {
         : status === HttpStatus.FORBIDDEN
         ? ErrorCode.FORBIDDEN
         : ErrorCode.INTERNAL_ERROR;
+    } else if (exception instanceof Prisma.PrismaClientKnownRequestError) {
+      if (exception.code === 'P2002') {
+        // Unique-constraint violation (e.g. duplicate email or model name).
+        status = HttpStatus.CONFLICT;
+        code = ErrorCode.CONFLICT;
+        const target = exception.meta?.target;
+        const field = Array.isArray(target) ? target.join(', ') : String(target ?? 'value');
+        message = `A record with this ${field} already exists`;
+      } else if (exception.code === 'P2025') {
+        status = HttpStatus.NOT_FOUND;
+        code = ErrorCode.NOT_FOUND;
+        message = 'Record not found';
+      } else {
+        this.logger.error({ err: exception, path: request.url }, 'Prisma error');
+      }
     } else {
       this.logger.error({ err: exception, path: request.url }, 'Unhandled exception');
     }

@@ -12,7 +12,9 @@ export const ROLE_PERMISSIONS: Record<string, Permission[]> = {
     'badges:read', 'badges:write',
   ],
   TRAINER: [
-    'users:read',
+    // Trainer may manage users, but the service scopes every write to their own
+    // trainees (role=USER, supervisor=self). Bulk import stays super-admin only.
+    'users:read', 'users:write', 'users:delete',
     'personas:read', 'personas:write',
     'sessions:read', 'sessions:write',
     'analytics:read',

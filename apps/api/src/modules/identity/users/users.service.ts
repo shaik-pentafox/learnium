@@ -2,19 +2,41 @@ import { Injectable } from '@nestjs/common';
 import * as argon2 from 'argon2';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../core/database/prisma.service';
-import { ConflictException, NotFoundException } from '../../../core/errors/domain.errors';
+import {
+  ConflictException,
+  ForbiddenException,
+  NotFoundException,
+} from '../../../core/errors/domain.errors';
+import type { JwtPayload } from '../../../core/auth/decorators/current-user.decorator';
 import type { CreateUserDto, UpdateUserDto, UserQueryDto } from './dto/user.dto';
+
+const TRAINEE_ROLE = 'USER';
 
 @Injectable()
 export class UsersService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async list(query: UserQueryDto) {
+  private isTrainer(actor: JwtPayload): boolean {
+    return actor.role === 'TRAINER';
+  }
+
+  /** Resolve the trainee (USER) role id, used to constrain trainer-created users. */
+  private async traineeRoleId(): Promise<number> {
+    const role = await this.prisma.roleDef.findUniqueOrThrow({
+      where: { name: TRAINEE_ROLE },
+      select: { id: true },
+    });
+    return role.id;
+  }
+
+  async list(query: UserQueryDto, actor: JwtPayload) {
     const { page, limit, q, roleId } = query;
     const skip = (page - 1) * limit;
 
     const where: Prisma.UserWhereInput = {
       isDeleted: false,
+      // Trainers only ever see their own trainees.
+      ...(this.isTrainer(actor) ? { supervisorId: actor.sub } : {}),
       ...(roleId !== undefined ? { roleId } : {}),
       ...(q
         ? {
@@ -54,7 +76,26 @@ export class UsersService {
     return user;
   }
 
-  async create(dto: CreateUserDto, createdById: number) {
+  /** Controller-facing read: trainers may only view their own trainees. */
+  async findOne(id: number, actor: JwtPayload) {
+    const user = await this.findById(id);
+    if (this.isTrainer(actor) && user.supervisorId !== actor.sub) {
+      throw new ForbiddenException('You can only view your own trainees');
+    }
+    return user;
+  }
+
+  async create(dto: CreateUserDto, actor: JwtPayload) {
+    // Trainers may only create trainees (role=USER) under themselves.
+    let { roleId, supervisorId } = dto;
+    if (this.isTrainer(actor)) {
+      const traineeRoleId = await this.traineeRoleId();
+      if (roleId !== traineeRoleId) {
+        throw new ForbiddenException('Trainers can only create trainees');
+      }
+      supervisorId = actor.sub; // force self as supervisor, ignore any override
+    }
+
     const existing = await this.prisma.user.findFirst({
       where: { OR: [{ employeeId: dto.employeeId }, { email: dto.email }], isDeleted: false },
     });
@@ -73,10 +114,10 @@ export class UsersService {
           firstName: dto.firstName,
           lastName: dto.lastName,
           email: dto.email,
-          roleId: dto.roleId,
-          ...(dto.supervisorId !== undefined ? { supervisorId: dto.supervisorId } : {}),
-          createdById,
-          updatedById: createdById,
+          roleId,
+          ...(supervisorId !== undefined ? { supervisorId } : {}),
+          createdById: actor.sub,
+          updatedById: actor.sub,
         },
         include: { role: true },
       });
@@ -91,8 +132,21 @@ export class UsersService {
     });
   }
 
-  async update(id: number, dto: UpdateUserDto, updatedById: number) {
-    await this.findById(id);
+  async update(id: number, dto: UpdateUserDto, actor: JwtPayload) {
+    const target = await this.findById(id);
+
+    if (this.isTrainer(actor)) {
+      if (target.supervisorId !== actor.sub) {
+        throw new ForbiddenException('You can only manage your own trainees');
+      }
+      const traineeRoleId = await this.traineeRoleId();
+      if (dto.roleId !== undefined && dto.roleId !== traineeRoleId) {
+        throw new ForbiddenException('Trainers cannot change a trainee’s role');
+      }
+      if (dto.supervisorId !== undefined && dto.supervisorId !== actor.sub) {
+        throw new ForbiddenException('Trainers cannot reassign trainees');
+      }
+    }
 
     if (dto.email) {
       const conflict = await this.prisma.user.findFirst({
@@ -101,7 +155,7 @@ export class UsersService {
       if (conflict) throw new ConflictException(`email ${dto.email} already exists`);
     }
 
-    const data: Prisma.UserUncheckedUpdateInput = { updatedById };
+    const data: Prisma.UserUncheckedUpdateInput = { updatedById: actor.sub };
     if (dto.firstName !== undefined) data.firstName = dto.firstName;
     if (dto.lastName !== undefined) data.lastName = dto.lastName;
     if (dto.email !== undefined) data.email = dto.email;
@@ -111,11 +165,14 @@ export class UsersService {
     return this.prisma.user.update({ where: { id }, data, include: { role: true } });
   }
 
-  async softDelete(id: number, deletedById: number) {
-    await this.findById(id);
+  async softDelete(id: number, actor: JwtPayload) {
+    const target = await this.findById(id);
+    if (this.isTrainer(actor) && target.supervisorId !== actor.sub) {
+      throw new ForbiddenException('You can only delete your own trainees');
+    }
     await this.prisma.user.update({
       where: { id },
-      data: { isDeleted: true, updatedById: deletedById },
+      data: { isDeleted: true, updatedById: actor.sub },
     });
   }
 }

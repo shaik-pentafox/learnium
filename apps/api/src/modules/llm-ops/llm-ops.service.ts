@@ -96,7 +96,7 @@ export class LlmOpsService {
   }
 
   async createModel(dto: CreateModelDto) {
-    const model = await this.prisma.llmModel.create({
+    const create = this.prisma.llmModel.create({
       data: {
         name: dto.name,
         providerId: dto.providerId,
@@ -107,6 +107,11 @@ export class LlmOpsService {
         outputPricePerMillion: dto.outputPricePerMillion ?? null,
       },
     });
+    // Exactly one default: clear the rest in the same transaction when this one
+    // claims it. Same invariant promoteModel enforces.
+    const [, model] = dto.isDefault
+      ? await this.prisma.$transaction([this.clearDefaults(), create])
+      : [null, await create];
     await this.invalidateModelCache();
     return model;
   }
@@ -121,9 +126,22 @@ export class LlmOpsService {
     if ('contextWindowTokens' in dto) data.contextWindowTokens = dto.contextWindowTokens ?? null;
     if ('inputPricePerMillion' in dto) data.inputPricePerMillion = dto.inputPricePerMillion ?? null;
     if ('outputPricePerMillion' in dto) data.outputPricePerMillion = dto.outputPricePerMillion ?? null;
-    const model = await this.prisma.llmModel.update({ where: { id }, data });
+
+    const update = this.prisma.llmModel.update({ where: { id }, data });
+    // Promoting via edit must demote the others too (excluding this row).
+    const [, model] = dto.isDefault === true
+      ? await this.prisma.$transaction([this.clearDefaults(id), update])
+      : [null, await update];
     await this.invalidateModelCache();
     return model;
+  }
+
+  /** Demote every default model, optionally excluding one id. */
+  private clearDefaults(exceptId?: number) {
+    return this.prisma.llmModel.updateMany({
+      where: { isDefault: true, ...(exceptId !== undefined ? { id: { not: exceptId } } : {}) },
+      data: { isDefault: false },
+    });
   }
 
   async promoteModel(id: number) {

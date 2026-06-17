@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { Inject, Injectable } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
+import * as argon2 from 'argon2';
 import { PrismaService } from '../../core/database/prisma.service';
 import { REDIS_CLIENT } from '../../core/redis/redis.module';
 import type Redis from 'ioredis';
@@ -12,6 +13,43 @@ import {
   UnauthorizedException,
   NotFoundException,
 } from '../../core/errors/domain.errors';
+import type { UpdateProfileDto } from './dto/profile.dto';
+
+// Single projection so GET /me and PATCH /me return an identical shape.
+const PROFILE_SELECT = {
+  id: true,
+  employeeId: true,
+  email: true,
+  firstName: true,
+  lastName: true,
+  avatarUrl: true,
+  role: { select: { name: true } },
+  credential: { select: { username: true } },
+} as const;
+
+interface ProfileRow {
+  id: number;
+  employeeId: string;
+  email: string;
+  firstName: string;
+  lastName: string;
+  avatarUrl: string | null;
+  role: { name: string };
+  credential: { username: string } | null;
+}
+
+function toProfile(user: ProfileRow) {
+  return {
+    id: user.id,
+    employeeId: user.employeeId,
+    email: user.email,
+    firstName: user.firstName,
+    lastName: user.lastName,
+    avatarUrl: user.avatarUrl,
+    role: user.role.name,
+    username: user.credential?.username ?? null,
+  };
+}
 
 @Injectable()
 export class AuthService {
@@ -104,6 +142,64 @@ export class AuthService {
       where: { tokenHash, isRevoked: false },
       data: { isRevoked: true },
     });
+  }
+
+  async getProfile(userId: number) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId, isDeleted: false },
+      select: PROFILE_SELECT,
+    });
+    if (!user) throw new NotFoundException('User', userId);
+    return toProfile(user);
+  }
+
+  async updateProfile(userId: number, dto: UpdateProfileDto) {
+    await this.assertUser(userId);
+    const user = await this.prisma.user.update({
+      where: { id: userId },
+      data: {
+        ...(dto.firstName !== undefined ? { firstName: dto.firstName } : {}),
+        ...(dto.lastName !== undefined ? { lastName: dto.lastName } : {}),
+        ...(dto.email !== undefined ? { email: dto.email } : {}),
+      },
+      select: PROFILE_SELECT,
+    });
+    return toProfile(user);
+  }
+
+  async changePassword(userId: number, currentPassword: string, newPassword: string) {
+    const cred = await this.prisma.defaultCredential.findUnique({
+      where: { userId },
+      select: { id: true, passwordHash: true },
+    });
+    if (!cred) throw new NotFoundException('Credential', userId);
+
+    const valid = await argon2.verify(cred.passwordHash, currentPassword);
+    if (!valid) {
+      throw new UnauthorizedException('Current password is incorrect', 'INVALID_CREDENTIALS');
+    }
+
+    await this.prisma.defaultCredential.update({
+      where: { id: cred.id },
+      data: { passwordHash: await argon2.hash(newPassword) },
+    });
+
+    // Force other sessions to re-authenticate; the current access token stays
+    // valid until it expires (≤15 min).
+    await this.prisma.refreshToken.updateMany({
+      where: { userId, isRevoked: false },
+      data: { isRevoked: true },
+    });
+
+    return { changed: true };
+  }
+
+  private async assertUser(userId: number) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId, isDeleted: false },
+      select: { id: true },
+    });
+    if (!user) throw new NotFoundException('User', userId);
   }
 
   async issueRealtimeTicket(userId: number): Promise<string> {
