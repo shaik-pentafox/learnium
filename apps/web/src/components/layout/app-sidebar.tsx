@@ -12,7 +12,6 @@ import {
 import type { UserRole } from '@/stores/auth'
 import { useAuthStore } from '@/stores/auth'
 import { Logo } from '@/components/logo'
-import { NavUser } from '@/components/layout/nav-user'
 import {
   Sidebar,
   SidebarContent,
@@ -33,19 +32,19 @@ interface NavItem {
 
 const ALL: UserRole[] = ['SUPER_ADMIN', 'TRAINER', 'USER']
 
-// Most targets land in F1+; only Dashboard and Practice route today.
+// Most targets land in F1+; Dashboard, Practice and LLM Ops route today.
 const NAV: NavItem[] = [
   { label: 'Dashboard', to: '/dashboard', icon: LayoutDashboard, roles: ALL },
   { label: 'Practice', to: '/practice', icon: MessagesSquare, roles: ALL },
   {
     label: 'Personas',
-    to: '/dashboard',
+    to: '/personas',
     icon: Drama,
     roles: ['SUPER_ADMIN', 'TRAINER'],
   },
   {
     label: 'Users',
-    to: '/dashboard',
+    to: '/users',
     icon: Users,
     roles: ['SUPER_ADMIN', 'TRAINER'],
   },
@@ -55,9 +54,33 @@ const NAV: NavItem[] = [
     icon: BarChart3,
     roles: ['SUPER_ADMIN', 'TRAINER'],
   },
-  { label: 'LLM Ops', to: '/dashboard', icon: Cpu, roles: ['SUPER_ADMIN'] },
-  { label: 'Settings', to: '/dashboard', icon: Settings, roles: ALL },
+  { label: 'LLM Ops', to: '/llm-ops', icon: Cpu, roles: ['SUPER_ADMIN'] },
 ]
+
+// Settings pinned to the bottom of the rail.
+const SETTINGS: NavItem = {
+  label: 'Settings',
+  to: '/settings',
+  icon: Settings,
+  roles: ALL,
+}
+
+function NavLink({ item }: { item: NavItem }) {
+  return (
+    <SidebarMenuItem>
+      <SidebarMenuButton asChild tooltip={item.label}>
+        <Link
+          to={item.to}
+          activeProps={{ 'data-active': 'true' }}
+          activeOptions={{ exact: item.to === '/dashboard' }}
+        >
+          <item.icon />
+          <span>{item.label}</span>
+        </Link>
+      </SidebarMenuButton>
+    </SidebarMenuItem>
+  )
+}
 
 export function AppSidebar() {
   const role = useAuthStore((s) => s.user?.role ?? 'USER')
@@ -73,10 +96,15 @@ export function AppSidebar() {
               size="lg"
               className="data-[slot=sidebar-menu-button]:!p-1.5"
             >
-              <Link to="/dashboard">
-                {/* Override the sidebar button's [&>svg]:size-4 clamp; shrink in the icon rail. */}
-                <Logo className="size-7!" />
-                <span className="font-brand text-xl">Learnium</span>
+              <Link
+                to="/dashboard"
+                className="group-data-[collapsible=icon]:!justify-center"
+              >
+                {/* Override the sidebar button's [&>svg]:size-4 clamp. */}
+                <Logo className="size-7! shrink-0" />
+                <span className="font-brand text-xl group-data-[collapsible=icon]:hidden">
+                  Learnium
+                </span>
               </Link>
             </SidebarMenuButton>
           </SidebarMenuItem>
@@ -87,25 +115,16 @@ export function AppSidebar() {
         <SidebarGroup>
           <SidebarMenu>
             {items.map((item) => (
-              <SidebarMenuItem key={item.label}>
-                <SidebarMenuButton asChild tooltip={item.label}>
-                  <Link
-                    to={item.to}
-                    activeProps={{ 'data-active': 'true' }}
-                    activeOptions={{ exact: item.to === '/dashboard' }}
-                  >
-                    <item.icon />
-                    <span>{item.label}</span>
-                  </Link>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
+              <NavLink key={item.label} item={item} />
             ))}
           </SidebarMenu>
         </SidebarGroup>
       </SidebarContent>
 
       <SidebarFooter>
-        <NavUser />
+        <SidebarMenu>
+          <NavLink item={SETTINGS} />
+        </SidebarMenu>
       </SidebarFooter>
     </Sidebar>
   )

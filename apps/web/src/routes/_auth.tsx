@@ -2,6 +2,7 @@ import { createFileRoute, Outlet, redirect } from '@tanstack/react-router'
 import { useAuthStore } from '@/stores/auth'
 import { AppSidebar } from '@/components/layout/app-sidebar'
 import { ThemeToggle } from '@/components/layout/theme-toggle'
+import { NavUser } from '@/components/layout/nav-user'
 import {
   SidebarInset,
   SidebarProvider,
@@ -22,18 +23,23 @@ function AuthLayout() {
   return (
     <SidebarProvider>
       <AppSidebar />
-      <SidebarInset>
-        <header className="flex h-14 shrink-0 items-center gap-2 border-b border-border px-4">
+      <SidebarInset className="h-svh overflow-hidden">
+        <header className="sticky top-0 z-10 flex h-14 shrink-0 items-center gap-2 border-b border-border bg-background px-4">
           <SidebarTrigger className="-ml-1" />
           <Separator
             orientation="vertical"
             className="mx-1 data-[orientation=vertical]:h-4"
           />
-          <div className="ml-auto">
+          <div className="ml-auto flex items-center gap-2">
             <ThemeToggle />
+            <Separator
+              orientation="vertical"
+              className="data-[orientation=vertical]:h-4"
+            />
+            <NavUser />
           </div>
         </header>
-        <main className="flex-1 overflow-auto p-6">
+        <main className="flex-1 overflow-auto py-6 px-8">
           <Outlet />
         </main>
       </SidebarInset>

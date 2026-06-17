@@ -29,7 +29,7 @@ function PracticeLauncher() {
   })
 
   return (
-    <div className="mx-auto max-w-3xl space-y-6">
+    <div className="space-y-6">
       <header>
         <h1 className="text-2xl font-semibold tracking-tight">Practice</h1>
         <p className="text-sm text-muted-foreground">
@@ -58,7 +58,7 @@ function PracticeLauncher() {
       )}
 
       {data && data.personas.length > 0 && (
-        <ul className="grid gap-3 sm:grid-cols-2">
+        <ul className="grid gap-3 grid-cols-3">
           {data.personas.map((p) => (
             <PersonaCard
               key={p.id}
@@ -111,7 +111,7 @@ function PersonaCard({ persona, starting, disabled, onStart }: PersonaCardProps)
 
 function LauncherSkeleton() {
   return (
-    <div className="grid gap-3 sm:grid-cols-2">
+    <div className="grid gap-3 grid-cols-3">
       {Array.from({ length: 4 }).map((_, i) => (
         <div
           key={i}
