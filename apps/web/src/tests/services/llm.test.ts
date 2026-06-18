@@ -11,6 +11,7 @@ import {
   updateModel,
   promoteModel,
   buildModelPayload,
+  listUsage,
   llmKeys,
 } from '@/services/llm'
 import { useAuthStore } from '@/stores/auth'
@@ -194,5 +195,27 @@ describe('llm model mutations', () => {
     )
     const result = await promoteModel(10)
     expect(result.promoted).toBe(true)
+  })
+})
+
+describe('llm usage', () => {
+  it('listUsage returns totals + per-model breakdown', async () => {
+    server.use(
+      http.get('*/api/v1/llm/usage', () =>
+        ok({
+          since: '2026-05-19T00:00:00Z',
+          totals: { calls: 12, totalTokens: 9000, costUsd: 0.42 },
+          byModel: [{ modelName: 'gpt-4o', calls: 12, totalTokens: 9000, costUsd: 0.42 }],
+          recent: [],
+        }),
+      ),
+    )
+    const result = await listUsage({ days: 30 })
+    expect(result.totals.calls).toBe(12)
+    expect(result.byModel[0].modelName).toBe('gpt-4o')
+  })
+
+  it('llmKeys.usage composes off the llm-ops namespace', () => {
+    expect(llmKeys.usage({ days: 7 })).toEqual([...queryKeys.llmOps, 'usage', { days: 7 }])
   })
 })

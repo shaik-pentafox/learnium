@@ -9,9 +9,15 @@ export const ScoreCriterionSchema = z.object({
   order: z.number().int().min(0).default(0),
 });
 
+const HexColorSchema = z
+  .string()
+  .regex(/^#[0-9a-fA-F]{6}$/, 'Expected a #RRGGBB hex color');
+
 export const CreatePersonaDtoSchema = z.object({
   name: z.string().min(1).max(200),
   description: z.string().optional(),
+  // Accent color for the persona's chat orb (#RRGGBB).
+  color: HexColorSchema.optional(),
   // Trainers supply structured template fields; the runtime systemPrompt is
   // rendered from these (see core/llm/persona-prompt.template). No raw prompt.
   template: PersonaTemplateSchema,
@@ -24,6 +30,7 @@ export const CreatePersonaDtoSchema = z.object({
 export const UpdatePersonaDtoSchema = z.object({
   name: z.string().min(1).max(200).optional(),
   description: z.string().optional(),
+  color: HexColorSchema.nullable().optional(),
   template: PersonaTemplateSchema.optional(),
   voiceStyleId: z.number().int().positive().nullable().optional(),
   conversationModelId: z.number().int().positive().nullable().optional(),

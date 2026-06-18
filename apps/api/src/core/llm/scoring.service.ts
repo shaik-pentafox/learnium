@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { HumanMessage } from '@langchain/core/messages';
 import { PrismaService } from '../database/prisma.service';
 import { ModelFactoryService } from './model-factory.service';
+import { UsageService } from './usage.service';
 
 export interface ScoreRow {
   criterionId: number;
@@ -36,6 +37,7 @@ export class ScoringService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly models: ModelFactoryService,
+    private readonly usage: UsageService,
   ) {}
 
   async scoreSession(sessionId: number): Promise<ScoringResult> {
@@ -73,7 +75,11 @@ ${criteriaText}
 
 Return one score object per rubric criterion (use the exact criterionId shown), each with a 0-to-max integer score and a one-sentence feedback, plus a 2-3 sentence overall feedback.`;
 
-    const llmResult = await this.runScoring(session.persona.scoringModelId, prompt);
+    const llmResult = await this.runScoring(
+      session.persona.scoringModelId,
+      prompt,
+      sessionId,
+    );
 
     const scoreRows: ScoreRow[] = criteria.map((c) => {
       const match = llmResult?.scores.find((s) => s.criterionId === c.id);
@@ -108,6 +114,7 @@ Return one score object per rubric criterion (use the exact criterionId shown), 
   private async runScoring(
     scoringModelId: number | null,
     prompt: string,
+    sessionId: number,
   ): Promise<LlmScoringResponse | null> {
     let resolved;
     try {
@@ -117,13 +124,31 @@ Return one score object per rubric criterion (use the exact criterionId shown), 
       return null;
     }
 
+    const startedAt = Date.now();
+    // Structured output hides the raw message (no usage_metadata), so scoring
+    // tokens are estimated from prompt + serialized result.
+    const recordUsage = (outputText: string): void => {
+      void this.usage.record({
+        kind: 'scoring',
+        modelId: resolved.id,
+        modelName: resolved.name,
+        sessionId,
+        inputTokens: this.usage.estimateTokens(prompt),
+        outputTokens: this.usage.estimateTokens(outputText),
+        estimated: true,
+        latencyMs: Date.now() - startedAt,
+      });
+    };
+
     try {
       const structured = resolved.model.withStructuredOutput(ScoringSchema, {
         name: 'scoring',
       });
-      return (await structured.invoke([
+      const result = (await structured.invoke([
         new HumanMessage(prompt),
       ])) as LlmScoringResponse;
+      recordUsage(JSON.stringify(result));
+      return result;
     } catch (err) {
       this.logger.warn(
         { err },
@@ -141,6 +166,7 @@ Return one score object per rubric criterion (use the exact criterionId shown), 
         typeof resp.content === 'string'
           ? resp.content
           : JSON.stringify(resp.content);
+      recordUsage(text);
       const cleaned = text
         .replace(/^```(?:json)?/i, '')
         .replace(/```$/, '')

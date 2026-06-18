@@ -159,7 +159,55 @@ export async function promoteModel(
   return apiPost<{ id: number; promoted: boolean }>(`/llm/models/${id}/promote`)
 }
 
+// ── Usage telemetry ──────────────────────────────────────────────────────────
+
+export interface UsageTotals {
+  calls: number
+  totalTokens: number
+  costUsd: number
+}
+
+export interface UsageByModel {
+  modelName: string
+  calls: number
+  totalTokens: number
+  costUsd: number
+}
+
+export interface UsageRow {
+  id: number
+  kind: string
+  modelName: string
+  sessionId: number | null
+  userId: number | null
+  inputTokens: number
+  outputTokens: number
+  totalTokens: number
+  costUsd: number
+  estimated: boolean
+  latencyMs: number | null
+  createdAt: string
+}
+
+export interface UsageSummary {
+  since: string
+  totals: UsageTotals
+  byModel: UsageByModel[]
+  recent: UsageRow[]
+}
+
+export interface UsageParams {
+  days?: number
+  limit?: number
+}
+
+/** GET /llm/usage — token/cost totals, per-model breakdown, recent calls. */
+export async function listUsage(params: UsageParams = {}): Promise<UsageSummary> {
+  return apiGet<UsageSummary>('/llm/usage', { params })
+}
+
 export const llmKeys = {
   providers: () => [...queryKeys.llmOps, 'providers'] as const,
   models: () => [...queryKeys.llmOps, 'models'] as const,
+  usage: (params: UsageParams) => [...queryKeys.llmOps, 'usage', params] as const,
 }

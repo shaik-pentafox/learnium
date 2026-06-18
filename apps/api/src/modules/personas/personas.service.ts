@@ -78,6 +78,7 @@ export class PersonasService {
           templateData: dto.template as unknown as Prisma.InputJsonValue,
           systemPrompt,
           ...(dto.description !== undefined ? { description: dto.description } : {}),
+          ...(dto.color !== undefined ? { color: dto.color } : {}),
           ...(dto.voiceStyleId !== undefined ? { voiceStyleId: dto.voiceStyleId } : {}),
           ...(dto.conversationModelId !== undefined ? { conversationModelId: dto.conversationModelId } : {}),
           ...(dto.scoringModelId !== undefined ? { scoringModelId: dto.scoringModelId } : {}),
@@ -126,6 +127,7 @@ export class PersonasService {
     const data: Prisma.PersonaUncheckedUpdateInput = { updatedById };
     if (personaData.name !== undefined) data.name = personaData.name;
     if (personaData.description !== undefined) data.description = personaData.description;
+    if ('color' in personaData) data.color = personaData.color ?? null;
     // Re-render the prompt cache when the structured template changes.
     if (personaData.template !== undefined) {
       data.templateData = personaData.template as unknown as Prisma.InputJsonValue;

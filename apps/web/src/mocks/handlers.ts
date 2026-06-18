@@ -95,6 +95,7 @@ interface MockPersona {
   id: number
   name: string
   description?: string | null
+  color?: string | null
   templateData: PersonaTemplate
   systemPrompt: string
   conversationModelId?: number | null
@@ -148,6 +149,7 @@ let nextCriterionId = 3
 interface PersonaBody {
   name: string
   description?: string
+  color?: string
   template: PersonaTemplate
   conversationModelId?: number
   scoringModelId?: number
@@ -276,6 +278,7 @@ export const handlers = [
       id: p.id,
       name: p.name,
       description: p.description ?? null,
+      color: p.color ?? null,
     }))
     return ok({ personas, total: personas.length })
   }),
@@ -416,6 +419,25 @@ export const handlers = [
     return ok({ id, promoted: true })
   }),
 
+  http.get(`${BASE}/llm/usage`, ({ request }) => {
+    if (!request.headers.get('Authorization')) {
+      return fail('UNAUTHORIZED', 'Missing credentials', 401)
+    }
+    const now = Date.now()
+    return ok({
+      since: new Date(now - 30 * 86_400_000).toISOString(),
+      totals: { calls: 128, totalTokens: 412_345, costUsd: 3.87 },
+      byModel: [
+        { modelName: 'gpt-4o', calls: 90, totalTokens: 320_000, costUsd: 3.2 },
+        { modelName: 'gemini-1.5-pro', calls: 38, totalTokens: 92_345, costUsd: 0.67 },
+      ],
+      recent: [
+        { id: 1, kind: 'chat', modelName: 'gpt-4o', sessionId: 1, userId: 1, inputTokens: 1200, outputTokens: 340, totalTokens: 1540, costUsd: 0.0111, estimated: false, latencyMs: 1820, createdAt: new Date(now - 5 * 60_000).toISOString() },
+        { id: 2, kind: 'scoring', modelName: 'gpt-4o', sessionId: 1, userId: 1, inputTokens: 2100, outputTokens: 180, totalTokens: 2280, costUsd: 0.0132, estimated: true, latencyMs: 2600, createdAt: new Date(now - 60 * 60_000).toISOString() },
+      ],
+    })
+  }),
+
   http.get(`${BASE}/auth/me`, ({ request }) => {
     if (!request.headers.get('Authorization')) {
       return fail('UNAUTHORIZED', 'Missing credentials', 401)
@@ -495,6 +517,7 @@ export const handlers = [
       id: nextPersonaId++,
       name: body.name,
       description: body.description ?? null,
+      color: body.color ?? null,
       templateData: t,
       systemPrompt: renderMockPrompt(t),
       conversationModelId: body.conversationModelId ?? null,
@@ -527,6 +550,7 @@ export const handlers = [
       ...existing,
       ...(body.name !== undefined ? { name: body.name } : {}),
       ...(body.description !== undefined ? { description: body.description } : {}),
+      ...(body.color !== undefined ? { color: body.color } : {}),
       ...(body.template !== undefined
         ? { templateData: body.template, systemPrompt: renderMockPrompt(body.template) }
         : {}),

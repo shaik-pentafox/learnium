@@ -205,7 +205,7 @@ interface FieldProps {
 
 function Field({ label, children }: FieldProps) {
   return (
-    <label className="block space-y-1.5 text-sm">
+    <label className="block space-y-2 text-sm">
       <span className="font-medium">{label}</span>
       {children}
     </label>

@@ -1,14 +1,15 @@
 import { createFileRoute, useNavigate } from '@tanstack/react-router'
 import { useQuery, useMutation } from '@tanstack/react-query'
-import { MessagesSquare } from 'lucide-react'
 import {
   listMyPersonas,
   personaKeys,
   type PersonaSummary,
 } from '@/services/personas'
 import { startSession } from '@/services/roleplay'
+import { personaOrbColors } from '@/lib/persona-color'
 import { notify } from '@/lib/toast'
 import { Button } from '@/components/ui/button'
+import { Orb } from '@/components/chat/orb'
 
 export const Route = createFileRoute('/_auth/practice/')({
   component: PracticeLauncher,
@@ -58,13 +59,12 @@ function PracticeLauncher() {
       )}
 
       {data && data.personas.length > 0 && (
-        <ul className="grid gap-3 grid-cols-3">
+        <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {data.personas.map((p) => (
             <PersonaCard
               key={p.id}
               persona={p}
               starting={start.isPending && start.variables === p.id}
-              disabled={start.isPending}
               onStart={() => start.mutate(p.id)}
             />
           ))}
@@ -77,17 +77,18 @@ function PracticeLauncher() {
 interface PersonaCardProps {
   persona: PersonaSummary
   starting: boolean
-  disabled: boolean
   onStart: () => void
 }
 
-function PersonaCard({ persona, starting, disabled, onStart }: PersonaCardProps) {
+function PersonaCard({ persona, starting, onStart }: PersonaCardProps) {
   return (
     <li className="flex flex-col rounded-lg border border-border bg-surface p-4">
       <div className="mb-3 flex items-start gap-3">
-        <div className="grid size-9 shrink-0 place-items-center rounded-md bg-accent text-accent-foreground">
-          <MessagesSquare className="size-4" />
-        </div>
+        <Orb
+          colors={personaOrbColors(persona.color)}
+          agentState="listening"
+          className="size-10 shrink-0"
+        />
         <div className="min-w-0">
           <div className="font-medium">{persona.name}</div>
           {persona.description && (
@@ -101,7 +102,7 @@ function PersonaCard({ persona, starting, disabled, onStart }: PersonaCardProps)
         size="sm"
         className="mt-auto self-start"
         onClick={onStart}
-        disabled={disabled}
+        disabled={starting}
       >
         {starting ? 'Starting…' : 'Start session'}
       </Button>

@@ -27,7 +27,12 @@ async function bootstrap(): Promise<void> {
     .map((s) => s.trim())
     .filter(Boolean);
 
-  app.enableCors({ origin: corsOrigins, credentials: true });
+  app.enableCors({
+    origin: corsOrigins,
+    credentials: true,
+    methods: ['GET', 'HEAD', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+  });
   app.setGlobalPrefix('api/v1', { exclude: ['health', 'ready'] });
 
   await app.listen(port, '0.0.0.0');

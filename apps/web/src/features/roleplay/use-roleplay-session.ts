@@ -18,6 +18,7 @@ export interface ChatMessage {
 export interface RoleplaySession {
   status: ChannelStatus
   personaName: string | null
+  personaColor: string | null
   messages: ChatMessage[]
   /** True while the assistant is streaming a reply. */
   thinking: boolean
@@ -36,6 +37,7 @@ function uid(): string {
 export function useRoleplaySession(sessionUid: string): RoleplaySession {
   const [status, setStatus] = useState<ChannelStatus>('connecting')
   const [personaName, setPersonaName] = useState<string | null>(null)
+  const [personaColor, setPersonaColor] = useState<string | null>(null)
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [thinking, setThinking] = useState(false)
   const [ended, setEnded] = useState(false)
@@ -51,6 +53,7 @@ export function useRoleplaySession(sessionUid: string): RoleplaySession {
     switch (msg.type) {
       case 'joined':
         setPersonaName(msg.personaName)
+        setPersonaColor(msg.personaColor ?? null)
         break
       case 'token': {
         const delta = msg.delta
@@ -139,6 +142,7 @@ export function useRoleplaySession(sessionUid: string): RoleplaySession {
   return {
     status,
     personaName,
+    personaColor,
     messages,
     thinking,
     ended,

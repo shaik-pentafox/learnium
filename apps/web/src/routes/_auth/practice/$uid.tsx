@@ -1,12 +1,19 @@
 import { useEffect, useRef, useState } from 'react'
 import { createFileRoute, Link } from '@tanstack/react-router'
-import { SendHorizonal } from 'lucide-react'
+import { SendHorizonal, Mic } from 'lucide-react'
 import { useRoleplaySession } from '@/features/roleplay/use-roleplay-session'
 import type { ChannelStatus } from '@/lib/ws-client'
 import type { ChatMessage } from '@/features/roleplay/use-roleplay-session'
+import { personaOrbColors } from '@/lib/persona-color'
 import { notify } from '@/lib/toast'
-import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
+import { Button } from '@/components/ui/button'
+import { Orb, type AgentState } from '@/components/chat/orb'
+import {
+  Conversation,
+  ConversationContent,
+  ConversationScrollButton,
+} from '@/components/chat/conversation'
 
 export const Route = createFileRoute('/_auth/practice/$uid')({
   component: ChatSession,
@@ -23,12 +30,7 @@ function ChatSession() {
   const { uid } = Route.useParams()
   const session = useRoleplaySession(uid)
   const [draft, setDraft] = useState('')
-  const scrollRef = useRef<HTMLDivElement>(null)
   const lastError = useRef<string | null>(null)
-
-  useEffect(() => {
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight })
-  }, [session.messages, session.thinking])
 
   useEffect(() => {
     if (session.error && session.error !== lastError.current) {
@@ -44,15 +46,32 @@ function ChatSession() {
   }
 
   const canChat = session.status === 'open' && !session.ended
+  const orbColors = personaOrbColors(session.personaColor)
+  // No voice yet: idle persona "listens", streams as "talking".
+  const orbState: AgentState =
+    session.status !== 'open' || session.ended
+      ? null
+      : session.thinking
+        ? 'talking'
+        : 'listening'
 
   return (
     <div className="mx-auto flex h-[calc(100svh-3.5rem-3rem)] max-w-3xl flex-col">
-      <header className="flex items-center justify-between pb-3">
-        <div>
-          <h1 className="text-lg font-semibold tracking-tight">
-            {session.personaName ?? 'Roleplay session'}
-          </h1>
-          <ConnectionLabel status={session.status} ended={session.ended} />
+      {/* Persona header */}
+      <header className="flex items-center justify-between gap-3 pb-3">
+        <div className="flex items-center gap-3">
+          <div
+            className="size-11 shrink-0 rounded-full"
+            style={{ boxShadow: `0 0 0 1px ${orbColors[0]}33` }}
+          >
+            <Orb colors={orbColors} agentState={orbState} className="size-11" />
+          </div>
+          <div>
+            <h1 className="text-lg font-semibold leading-tight tracking-tight">
+              {session.personaName ?? 'Roleplay session'}
+            </h1>
+            <ConnectionLabel status={session.status} ended={session.ended} />
+          </div>
         </div>
         {!session.ended && (
           <Button
@@ -61,35 +80,34 @@ function ChatSession() {
             onClick={session.endSession}
             disabled={session.status !== 'open'}
           >
-            End & score
+            End &amp; score
           </Button>
         )}
       </header>
 
-      <div
-        ref={scrollRef}
-        className="flex-1 space-y-3 overflow-y-auto rounded-lg border border-border bg-surface p-4"
-      >
-        {session.messages.length === 0 && !session.thinking && (
-          <p className="grid h-full place-items-center text-sm text-muted-foreground">
-            Say something to begin the roleplay.
-          </p>
-        )}
-        {session.messages.map((m) => (
-          <Bubble key={m.localId} message={m} />
-        ))}
-        {session.thinking && session.messages.at(-1)?.role !== 'assistant' && (
-          <TypingBubble />
-        )}
+      {/* Transcript */}
+      <Conversation className="rounded-xl border border-border bg-surface">
+        <ConversationContent className="space-y-1">
+          {session.messages.length === 0 && !session.thinking && (
+            <EmptyState colors={orbColors} />
+          )}
+          {session.messages.map((m) => (
+            <Bubble key={m.localId} message={m} />
+          ))}
+          {session.thinking && session.messages.at(-1)?.role !== 'assistant' && (
+            <TypingBubble />
+          )}
+          {session.ended && (
+            <ScoreReveal
+              scores={(session.scores ?? []) as ScoreRow[]}
+              feedback={session.feedback}
+            />
+          )}
+        </ConversationContent>
+        <ConversationScrollButton />
+      </Conversation>
 
-        {session.ended && (
-          <ScoreReveal
-            scores={(session.scores ?? []) as ScoreRow[]}
-            feedback={session.feedback}
-          />
-        )}
-      </div>
-
+      {/* Composer (voice-ready shell — mic slot reserved) */}
       {session.ended ? (
         <div className="pt-3">
           <Link to="/practice" className="text-sm text-primary hover:underline">
@@ -97,7 +115,17 @@ function ChatSession() {
           </Link>
         </div>
       ) : (
-        <div className="flex items-end gap-2 pt-3">
+        <div className="mt-3 flex items-end gap-2 rounded-xl border border-border bg-background p-2 shadow-sm shadow-black/5">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="shrink-0"
+            disabled
+            aria-label="Voice (coming soon)"
+            title="Voice mode — coming soon"
+          >
+            <Mic className="text-muted-foreground/60" />
+          </Button>
           <textarea
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
@@ -110,10 +138,11 @@ function ChatSession() {
             rows={1}
             placeholder={canChat ? 'Type a message…' : 'Connecting…'}
             disabled={!canChat}
-            className="max-h-32 flex-1 resize-none rounded-md border border-input bg-background px-3 py-2.5 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-ring disabled:opacity-60"
+            className="max-h-32 flex-1 resize-none bg-transparent px-1 py-2 text-sm outline-none placeholder:text-muted-foreground/70 disabled:opacity-60"
           />
           <Button
             size="icon"
+            className="shrink-0"
             aria-label="Send"
             onClick={submit}
             disabled={!canChat || !draft.trim()}
@@ -126,16 +155,27 @@ function ChatSession() {
   )
 }
 
+function EmptyState({ colors }: { colors: [string, string] }) {
+  return (
+    <div className="flex h-[40vh] flex-col items-center justify-center gap-4 text-center">
+      <Orb colors={colors} agentState="listening" className="size-28" />
+      <p className="text-sm text-muted-foreground">
+        Say something to begin the roleplay.
+      </p>
+    </div>
+  )
+}
+
 function Bubble({ message }: { message: ChatMessage }) {
   const isUser = message.role === 'user'
   return (
-    <div className={cn('flex', isUser ? 'justify-end' : 'justify-start')}>
+    <div className={cn('flex py-1.5', isUser ? 'justify-end' : 'justify-start')}>
       <div
         className={cn(
-          'max-w-[80%] whitespace-pre-wrap rounded-lg px-3 py-2 text-sm',
+          'max-w-[80%] whitespace-pre-wrap rounded-2xl px-4 py-2.5 text-sm',
           isUser
-            ? 'bg-primary text-primary-foreground'
-            : 'bg-muted text-foreground',
+            ? 'rounded-br-md bg-primary text-primary-foreground'
+            : 'rounded-bl-md bg-muted text-foreground',
         )}
       >
         {message.content}
@@ -147,8 +187,8 @@ function Bubble({ message }: { message: ChatMessage }) {
 
 function TypingBubble() {
   return (
-    <div className="flex justify-start">
-      <div className="rounded-lg bg-muted px-3 py-2 text-sm text-muted-foreground">
+    <div className="flex justify-start py-1.5">
+      <div className="rounded-2xl rounded-bl-md bg-muted px-4 py-2.5 text-sm text-muted-foreground">
         <span className="inline-flex gap-1">
           <Dot /> <Dot /> <Dot />
         </span>
@@ -162,7 +202,9 @@ function Caret() {
 }
 
 function Dot() {
-  return <span className="inline-block size-1.5 animate-pulse rounded-full bg-current" />
+  return (
+    <span className="inline-block size-1.5 animate-pulse rounded-full bg-current" />
+  )
 }
 
 const STATUS_TEXT: Record<ChannelStatus, string> = {
@@ -179,7 +221,8 @@ function ConnectionLabel({
   status: ChannelStatus
   ended: boolean
 }) {
-  if (ended) return <span className="text-xs text-success">Session complete</span>
+  if (ended)
+    return <span className="text-xs text-success">Session complete</span>
   const tone =
     status === 'open'
       ? 'text-success'
@@ -197,12 +240,12 @@ function ScoreReveal({
   feedback: string | null
 }) {
   return (
-    <div className="mt-2 rounded-lg border border-border bg-background p-4">
+    <div className="mt-3 rounded-xl border border-border bg-background p-4">
       <h2 className="text-sm font-semibold">Session feedback</h2>
       {feedback && (
         <p className="mt-1 text-sm text-muted-foreground">{feedback}</p>
       )}
-      {scores.length > 0 && (
+      {scores.length > 0 ? (
         <ul className="mt-3 space-y-2">
           {scores.map((s) => (
             <li
@@ -218,6 +261,13 @@ function ScoreReveal({
             </li>
           ))}
         </ul>
+      ) : (
+        !feedback && (
+          <p className="mt-1 text-sm text-muted-foreground">
+            No scores recorded. This persona has no scoring rubric, or no scoring
+            model is configured.
+          </p>
+        )
       )}
     </div>
   )

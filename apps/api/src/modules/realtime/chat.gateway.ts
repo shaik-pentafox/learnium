@@ -20,6 +20,7 @@ import {
   renderSystemPrompt,
 } from '../../core/llm/persona-prompt.template';
 import { ScoringService } from '../../core/llm/scoring.service';
+import { UsageService } from '../../core/llm/usage.service';
 import { SessionRegistry } from './session-registry';
 
 const END_SENTINEL = '[CONVERSATION_ENDED]';
@@ -36,6 +37,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     private readonly models: ModelFactoryService,
     private readonly checkpointer: CheckpointerService,
     private readonly scoringService: ScoringService,
+    private readonly usage: UsageService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
   ) {}
 
@@ -63,6 +65,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
           select: {
             id: true,
             name: true,
+            color: true,
             templateData: true,
             systemPrompt: true,
             conversationModelId: true,
@@ -87,8 +90,12 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     // Build the per-session roleplay graph: registry model (+ fallbacks) + system
     // prompt, durable state via the shared PostgresSaver (thread_id = session uid).
     let graph;
+    let resolvedModelId: number | undefined;
+    let resolvedModelName: string | undefined;
     try {
       const resolved = await this.models.resolve(session.persona.conversationModelId);
+      resolvedModelId = resolved.id;
+      resolvedModelName = resolved.name;
       this.logger.debug(
         `Resolved model "${resolved.name}" for session ${sessionUid} (persona ${session.persona.name})`,
       );
@@ -115,11 +122,14 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       session.persona.name,
       graph,
     );
+    wsClient.modelId = resolvedModelId;
+    wsClient.modelName = resolvedModelName;
 
     this.send(client, {
       type: 'joined',
       sessionId: session.uid,
       personaName: session.persona.name,
+      personaColor: session.persona.color ?? null,
       systemPrompt,
     });
 
@@ -206,6 +216,9 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       this.send(client, { type: 'token', delta: text });
     };
 
+    const startedAt = Date.now();
+    let providerUsage: { inputTokens: number; outputTokens: number } | null = null;
+
     try {
       const stream = (await wsClient.graph.stream(
         { messages: [new HumanMessage(content)] },
@@ -213,6 +226,9 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       )) as AsyncIterable<[AIMessageChunk, unknown]>;
 
       for await (const [chunk] of stream) {
+        // Providers emit usage_metadata once (usually on the final chunk).
+        const u = this.usage.extractUsage(chunk);
+        if (u) providerUsage = u;
         const delta = typeof chunk.content === 'string' ? chunk.content : '';
         if (!delta) continue;
         buffer += delta;
@@ -240,6 +256,20 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     this.logger.debug(
       `Turn streamed ${fullContent.length} chars for session ${wsClient.sessionUid}${ended ? ' (ended)' : ''}`,
     );
+
+    // Telemetry: real provider usage when available, else a char-based estimate
+    // (this turn's input only; prior context isn't counted in the estimate).
+    void this.usage.record({
+      kind: 'chat',
+      modelId: wsClient.modelId ?? null,
+      modelName: wsClient.modelName ?? 'unknown',
+      sessionId: wsClient.sessionDbId,
+      userId: wsClient.userId,
+      inputTokens: providerUsage?.inputTokens ?? this.usage.estimateTokens(content),
+      outputTokens: providerUsage?.outputTokens ?? this.usage.estimateTokens(fullContent),
+      estimated: providerUsage === null,
+      latencyMs: Date.now() - startedAt,
+    });
 
     const saved = await this.prisma.chatMessage.create({
       data: { sessionId: wsClient.sessionDbId, role: 'assistant', content: fullContent.trim() },
@@ -276,9 +306,20 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       data: { status: 'COMPLETED', endedAt: new Date() },
     });
 
-    const { scores, feedback } = await this.scoringService.scoreSession(
-      wsClient.sessionDbId,
-    );
+    // Scoring must never strand the client: if it throws, still send
+    // session_ended (empty) so the UI leaves the "ending…" state.
+    let scores: unknown[] = [];
+    let feedback: string | null = null;
+    try {
+      const result = await this.scoringService.scoreSession(wsClient.sessionDbId);
+      scores = result.scores;
+      feedback = result.feedback;
+      this.logger.debug(
+        `Scored session ${wsClient.sessionUid}: ${result.scores.length} criteria`,
+      );
+    } catch (err) {
+      this.logger.error({ err }, `Scoring failed for session ${wsClient.sessionUid}`);
+    }
 
     this.send(client, { type: 'session_ended', scores, feedback });
   }

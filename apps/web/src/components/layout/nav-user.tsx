@@ -1,6 +1,8 @@
 import { useNavigate } from '@tanstack/react-router'
+import { useQuery } from '@tanstack/react-query'
 import { ChevronDown, LogOut, Settings, UserCircle } from 'lucide-react'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
+import { getMe, accountKeys } from '@/services/account'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -32,6 +34,13 @@ function initials(name: string): string {
 export function NavUser() {
   const navigate = useNavigate()
   const user = useAuthStore((s) => s.user)
+  // Prefer the real profile (full name) over the login username.
+  const me = useQuery({
+    queryKey: accountKeys.me(),
+    queryFn: getMe,
+    enabled: !!user,
+    staleTime: 5 * 60 * 1000,
+  })
 
   if (!user) return null
 
@@ -41,6 +50,10 @@ export function NavUser() {
     await navigate({ to: '/login' })
   }
 
+  const fullName = me.data
+    ? `${me.data.firstName} ${me.data.lastName}`.trim()
+    : ''
+  const displayName = fullName || user.name
   const roleLabel = ROLE_LABEL[user.role] ?? user.role
 
   return (
@@ -52,11 +65,11 @@ export function NavUser() {
         >
           <Avatar className="size-8 rounded-lg">
             <AvatarFallback className="rounded-lg bg-primary text-xs text-primary-foreground">
-              {initials(user.name)}
+              {initials(displayName)}
             </AvatarFallback>
           </Avatar>
           <div className="hidden text-left leading-tight sm:grid">
-            <span className="truncate text-sm font-medium">{user.name}</span>
+            <span className="truncate text-sm font-medium">{displayName}</span>
             <span className="truncate text-xs text-muted-foreground">
               {roleLabel}
             </span>
@@ -74,11 +87,11 @@ export function NavUser() {
           <div className="flex items-center gap-2 px-1 py-1.5 text-left text-sm">
             <Avatar className="size-8 rounded-lg">
               <AvatarFallback className="rounded-lg bg-primary text-xs text-primary-foreground">
-                {initials(user.name)}
+                {initials(displayName)}
               </AvatarFallback>
             </Avatar>
             <div className="grid flex-1 leading-tight">
-              <span className="truncate font-medium">{user.name}</span>
+              <span className="truncate font-medium">{displayName}</span>
               <span className="truncate text-xs text-muted-foreground">
                 {roleLabel}
               </span>
@@ -87,11 +100,11 @@ export function NavUser() {
         </DropdownMenuLabel>
         <DropdownMenuSeparator />
         <DropdownMenuGroup>
-          <DropdownMenuItem onClick={() => navigate({ to: '/dashboard' })}>
+          <DropdownMenuItem onClick={() => navigate({ to: '/settings' })}>
             <UserCircle />
             Account
           </DropdownMenuItem>
-          <DropdownMenuItem onClick={() => navigate({ to: '/dashboard' })}>
+          <DropdownMenuItem onClick={() => navigate({ to: '/settings' })}>
             <Settings />
             Settings
           </DropdownMenuItem>

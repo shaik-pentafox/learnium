@@ -14,6 +14,12 @@ import {
 } from '@/components/ui/select'
 import { notify } from '@/lib/toast'
 import { useAuthStore } from '@/stores/auth'
+import { Orb } from '@/components/chat/orb'
+import {
+  personaOrbColors,
+  isHexColor,
+  DEFAULT_PERSONA_COLOR,
+} from '@/lib/persona-color'
 import { listModels, llmKeys } from '@/services/llm'
 import { startSession } from '@/services/roleplay'
 import {
@@ -92,6 +98,7 @@ export function PersonaBuilder({ persona }: { persona?: Persona }) {
 
   const [name, setName] = useState(persona?.name ?? '')
   const [description, setDescription] = useState(persona?.description ?? '')
+  const [color, setColor] = useState(persona?.color ?? DEFAULT_PERSONA_COLOR)
   const [template, setTemplate] = useState<PersonaTemplate>(() => toTemplate(persona))
   const [conversationModelId, setConversationModelId] = useState<string>(
     persona?.conversationModelId != null ? String(persona.conversationModelId) : '',
@@ -116,6 +123,7 @@ export function PersonaBuilder({ persona }: { persona?: Persona }) {
     return {
       name,
       description,
+      color,
       template,
       conversationModelId: conversationModelId ? Number(conversationModelId) : null,
       scoringModelId: scoringModelId ? Number(scoringModelId) : null,
@@ -196,6 +204,28 @@ export function PersonaBuilder({ persona }: { persona?: Persona }) {
               onChange={(e) => setDescription(e.target.value)}
               placeholder="Billing dispute, frustrated premium customer…"
             />
+          </Field>
+          <Field label="Accent color" hint="Drives the persona's chat orb.">
+            <div className="flex items-center gap-3">
+              <Orb
+                colors={personaOrbColors(color)}
+                agentState="listening"
+                className="size-12 shrink-0"
+              />
+              <input
+                type="color"
+                value={isHexColor(color) ? color : DEFAULT_PERSONA_COLOR}
+                onChange={(e) => setColor(e.target.value)}
+                aria-label="Pick accent color"
+                className="size-9 shrink-0 cursor-pointer rounded-md border border-input bg-transparent"
+              />
+              <Input
+                value={color}
+                onChange={(e) => setColor(e.target.value)}
+                placeholder={DEFAULT_PERSONA_COLOR}
+                className="max-w-[140px] font-data"
+              />
+            </div>
           </Field>
         </Section>
 
@@ -487,18 +517,22 @@ interface SectionProps {
 
 function Section({ title, hint, icon, action, children }: SectionProps) {
   return (
-    <section className="rounded-lg border border-border bg-surface p-4">
-      <div className="mb-3 flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
-          {icon}
-          <h2 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-            {title}
-          </h2>
+    <section className="overflow-hidden rounded-xl border border-border bg-surface shadow-sm shadow-black/[0.02]">
+      <div className="flex items-center justify-between gap-2 border-b border-border bg-muted/40 px-5 py-3">
+        <div className="flex items-center gap-2.5">
+          {icon && (
+            <span className="grid size-7 shrink-0 place-items-center rounded-md bg-accent text-accent-foreground">
+              {icon}
+            </span>
+          )}
+          <div>
+            <h2 className="text-sm font-semibold leading-tight">{title}</h2>
+            {hint && <p className="text-xs text-muted-foreground">{hint}</p>}
+          </div>
         </div>
         {action}
       </div>
-      {hint && <p className="mb-3 -mt-2 text-xs text-muted-foreground">{hint}</p>}
-      <div className="space-y-4">{children}</div>
+      <div className="space-y-4 p-5">{children}</div>
     </section>
   )
 }
@@ -513,7 +547,7 @@ function Field({
   children: React.ReactNode
 }) {
   return (
-    <label className="block space-y-1.5 text-sm">
+    <label className="block space-y-2 text-sm">
       <span className="font-medium">{label}</span>
       {children}
       {hint && <span className="block text-xs text-muted-foreground">{hint}</span>}

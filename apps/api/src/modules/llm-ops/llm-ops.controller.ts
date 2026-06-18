@@ -10,6 +10,7 @@ import {
   ParseIntPipe,
 } from '@nestjs/common';
 import { LlmOpsService } from './llm-ops.service';
+import { UsageService } from '../../core/llm/usage.service';
 import { Permissions } from '../../core/auth/decorators/permissions.decorator';
 import { ValidationException } from '../../core/errors/domain.errors';
 import {
@@ -22,7 +23,21 @@ import {
 
 @Controller('llm')
 export class LlmOpsController {
-  constructor(private readonly llmOpsService: LlmOpsService) {}
+  constructor(
+    private readonly llmOpsService: LlmOpsService,
+    private readonly usage: UsageService,
+  ) {}
+
+  // ── Usage telemetry ──────────────────────────────────────────────────────────
+
+  @Get('usage')
+  @Permissions('llmops:read')
+  usageSummary(@Query('days') days?: string, @Query('limit') limit?: string) {
+    return this.usage.summary({
+      ...(days ? { days: Number(days) } : {}),
+      ...(limit ? { limit: Number(limit) } : {}),
+    });
+  }
 
   // ── Providers ──────────────────────────────────────────────────────────────
 

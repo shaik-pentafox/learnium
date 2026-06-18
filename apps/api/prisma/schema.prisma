@@ -133,10 +133,34 @@ model LlmModel {
   @@map("llm_models")
 }
 
+// Per-call LLM usage + cost telemetry. Written on each chat turn / scoring run.
+model LlmUsage {
+  id           Int      @id @default(autoincrement())
+  kind         String   // chat | scoring
+  modelId      Int?
+  modelName    String
+  providerType String?
+  sessionId    Int?
+  userId       Int?
+  inputTokens  Int      @default(0)
+  outputTokens Int      @default(0)
+  totalTokens  Int      @default(0)
+  costUsd      Float    @default(0)
+  estimated    Boolean  @default(false) // tokens approximated (provider returned no usage)
+  latencyMs    Int?
+  createdAt    DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([modelId])
+  @@map("llm_usage")
+}
+
 model Persona {
   id                  Int              @id @default(autoincrement())
   name                String
   description         String?
+  // Hex accent color for the persona's chat orb/avatar (e.g. "#6366f1").
+  color               String?
   // Structured authoring fields (source of truth). The runtime prompt is
   // rendered from these; `systemPrompt` is a rendered cache kept for preview.
   templateData        Json?

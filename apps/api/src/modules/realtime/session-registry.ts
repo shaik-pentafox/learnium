@@ -10,6 +10,9 @@ export interface WsClient {
   personaName?: string;
   /** Per-session compiled LangGraph (model + system prompt bound). */
   graph?: RoleplayGraph;
+  /** Resolved conversation model — carried for usage telemetry. */
+  modelId?: number;
+  modelName?: string;
 }
 
 @Injectable()

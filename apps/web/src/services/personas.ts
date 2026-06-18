@@ -43,12 +43,15 @@ export interface PersonaSummary {
   id: number
   name: string
   description?: string | null
+  color?: string | null
 }
 
 export interface Persona {
   id: number
   name: string
   description?: string | null
+  /** Accent color for the chat orb (#RRGGBB). */
+  color?: string | null
   /** Structured authoring fields (source of truth). Null for any legacy persona. */
   templateData?: PersonaTemplate | null
   /** Server-rendered prompt cache — read-only preview. */
@@ -86,6 +89,8 @@ export interface ScoreCriterionInput {
 export interface PersonaInput {
   name: string
   description?: string
+  /** Accent color for the chat orb (#RRGGBB). */
+  color?: string | null
   template: PersonaTemplate
   /** null/undefined → the registry default model is used. */
   conversationModelId?: number | null
@@ -97,6 +102,7 @@ interface PersonaPayload {
   name: string
   template: PersonaTemplate
   description?: string
+  color?: string
   conversationModelId?: number
   scoringModelId?: number
   scoreCriteria?: ScoreCriterionInput[]
@@ -144,6 +150,8 @@ export function buildPersonaPayload(input: PersonaInput): PersonaPayload {
   }
   const description = input.description?.trim()
   if (description) payload.description = description
+  const color = input.color?.trim()
+  if (color) payload.color = color
   if (input.conversationModelId != null) {
     payload.conversationModelId = input.conversationModelId
   }

@@ -34,9 +34,13 @@ interface ErrorEnvelope {
   details?: unknown
 }
 
-// Direct backend URL (CORS) when VITE_API_URL is set; else the relative path
-// (legacy vite-proxy mode).
-export const API_BASE_URL = import.meta.env.VITE_API_URL ?? '/api/v1'
+// When mocks are on, always use the relative path so the MSW service worker
+// (same-origin handlers) intercepts — VITE_API_URL is ignored. Otherwise use
+// the configured direct backend URL (CORS), falling back to the relative path.
+const MOCKS_ON = import.meta.env.VITE_ENABLE_MOCKS === 'true'
+export const API_BASE_URL = MOCKS_ON
+  ? '/api/v1'
+  : import.meta.env.VITE_API_URL || '/api/v1'
 
 const http: AxiosInstance = axios.create({
   baseURL: API_BASE_URL,

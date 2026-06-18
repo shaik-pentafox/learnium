@@ -7,6 +7,7 @@ import {
   type PersonaSummary,
 } from '@/services/personas'
 import { useAuthStore } from '@/stores/auth'
+import { personaOrbColors } from '@/lib/persona-color'
 import { buttonVariants } from '@/components/ui/button'
 
 export const Route = createFileRoute('/_auth/personas/')({
@@ -68,9 +69,9 @@ function PersonasListPage() {
       )}
 
       {data && data.personas.length > 0 && (
-        <ul className="divide-y divide-border rounded-lg border border-border bg-surface">
+        <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {data.personas.map((p) => (
-            <PersonaRow key={p.id} persona={p} />
+            <PersonaCard key={p.id} persona={p} />
           ))}
         </ul>
       )}
@@ -78,17 +79,15 @@ function PersonasListPage() {
   )
 }
 
-function PersonaRow({ persona }: { persona: PersonaSummary }) {
+function PersonaCard({ persona }: { persona: PersonaSummary }) {
   return (
-    <li className="flex items-center justify-between gap-3 px-4 py-3">
-      <div className="flex min-w-0 items-center gap-3">
-        <div className="grid size-9 shrink-0 place-items-center rounded-md bg-accent text-accent-foreground">
-          <Drama className="size-4" />
-        </div>
+    <li className="group relative flex flex-col rounded-xl border border-border bg-surface p-4 transition-colors hover:border-primary/40">
+      <div className="mb-3 flex items-start gap-3">
+        <PersonaBadge color={persona.color} />
         <div className="min-w-0">
           <div className="truncate font-medium">{persona.name}</div>
           {persona.description && (
-            <p className="truncate text-sm text-muted-foreground">
+            <p className="mt-0.5 line-clamp-2 text-sm text-muted-foreground">
               {persona.description}
             </p>
           )}
@@ -97,12 +96,29 @@ function PersonaRow({ persona }: { persona: PersonaSummary }) {
       <Link
         to="/personas/$id"
         params={{ id: String(persona.id) }}
-        className={buttonVariants({ variant: 'secondary', size: 'sm' })}
+        className={buttonVariants({
+          variant: 'secondary',
+          size: 'sm',
+          className: 'mt-auto self-start',
+        })}
       >
         <Pencil className="size-4" />
         Edit
       </Link>
     </li>
+  )
+}
+
+/** Persona-colored orb badge (CSS gradient — cheap for long lists). */
+function PersonaBadge({ color }: { color?: string | null }) {
+  const [base, light] = personaOrbColors(color)
+  return (
+    <div
+      className="size-10 shrink-0 rounded-full ring-1 ring-border"
+      style={{
+        background: `radial-gradient(circle at 32% 28%, ${light}, ${base} 72%)`,
+      }}
+    />
   )
 }
 

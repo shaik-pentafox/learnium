@@ -10,6 +10,7 @@ const RoleplayServerSchema = z.discriminatedUnion('type', [
     type: z.literal('joined'),
     sessionId: z.string(),
     personaName: z.string(),
+    personaColor: z.string().nullable().optional(),
     systemPrompt: z.string(),
   }),
   z.object({ type: z.literal('token'), delta: z.string() }),
@@ -52,7 +53,11 @@ const BASE_BACKOFF_MS = 500
 /** ws(s):// origin of the backend. Derived from VITE_API_URL when set (direct
  *  mode), otherwise the current page host (legacy vite-proxy mode). */
 function realtimeOrigin(): string {
-  const apiUrl = import.meta.env.VITE_API_URL
+  // Mocks on → page host (VITE_API_URL ignored, matching the REST client).
+  const apiUrl =
+    import.meta.env.VITE_ENABLE_MOCKS === 'true'
+      ? undefined
+      : import.meta.env.VITE_API_URL
   if (apiUrl) {
     const u = new URL(apiUrl)
     return `${u.protocol === 'https:' ? 'wss' : 'ws'}://${u.host}`

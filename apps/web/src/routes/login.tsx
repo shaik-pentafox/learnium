@@ -7,6 +7,7 @@ import { login } from '@/services/auth'
 import { useAuthStore } from '@/stores/auth'
 import { notify } from '@/lib/toast'
 import { Button } from '@/components/ui/button'
+import { PasswordInput } from '@/components/ui/password-input'
 import { Logo } from '@/components/logo'
 import { ShaderBackground } from '@/components/shader-background'
 
@@ -72,10 +73,9 @@ function LoginPage() {
           </Field>
 
           <Field label="Password" error={errors.password?.message}>
-            <input
-              type="password"
+            <PasswordInput
               autoComplete="current-password"
-              className="h-11 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-ring"
+              className="h-11"
               placeholder="••••••••"
               {...register('password')}
             />
@@ -108,7 +108,7 @@ interface FieldProps {
 
 function Field({ label, error, children }: FieldProps) {
   return (
-    <div className="space-y-1.5">
+    <div className="space-y-2">
       <label className="text-sm font-medium">{label}</label>
       {children}
       {error && <p className="text-xs text-destructive">{error}</p>}

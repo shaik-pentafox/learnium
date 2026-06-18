@@ -11,6 +11,8 @@ reference_app/
 *.tsbuildinfo
 CLAUDE.md
 .claude
+plans/
+scripts/
 package-lock.json
 yarn.lock
 
