@@ -1,6 +1,35 @@
 import { apiGet, apiPost, apiPatch } from '@/lib/api-client'
 import { queryKeys } from '@/lib/query-keys'
 
+/** Mirrors the backend PersonaTemplateSchema (core/llm/persona-prompt.template). */
+export const CHANNELS = ['chat', 'audio'] as const
+export type Channel = (typeof CHANNELS)[number]
+
+export const EMOTIONS = [
+  'calm',
+  'confused',
+  'frustrated',
+  'angry',
+  'anxious',
+] as const
+export type Emotion = (typeof EMOTIONS)[number]
+
+export interface PersonaTemplate {
+  customerName?: string
+  customerProfile: string
+  company: string
+  productContext?: string
+  issue: string
+  channel: Channel
+  emotion: Emotion
+  intensity: number
+  desiredOutcome: string
+  hiddenDetails?: string
+  behaviorNotes?: string
+  resolutionCriteria: string
+  additionalInstructions?: string
+}
+
 export interface ScoreCriterion {
   id: number
   name: string
@@ -20,9 +49,10 @@ export interface Persona {
   id: number
   name: string
   description?: string | null
-  systemPrompt: string
-  customInstructions?: string | null
-  voiceStyleId?: number | null
+  /** Structured authoring fields (source of truth). Null for any legacy persona. */
+  templateData?: PersonaTemplate | null
+  /** Server-rendered prompt cache — read-only preview. */
+  systemPrompt?: string | null
   conversationModelId?: number | null
   scoringModelId?: number | null
   scoreCriteria?: ScoreCriterion[]
@@ -38,7 +68,7 @@ export async function listMyPersonas(): Promise<MyPersonasData> {
   return apiGet<MyPersonasData>('/personas/my')
 }
 
-/** GET /personas/:id — full persona incl. rubric (personas:read). */
+/** GET /personas/:id — full persona incl. template + rubric (personas:read). */
 export async function getPersona(id: number): Promise<Persona> {
   return apiGet<Persona>(`/personas/${id}`)
 }
@@ -56,8 +86,7 @@ export interface ScoreCriterionInput {
 export interface PersonaInput {
   name: string
   description?: string
-  systemPrompt: string
-  customInstructions?: string
+  template: PersonaTemplate
   /** null/undefined → the registry default model is used. */
   conversationModelId?: number | null
   scoringModelId?: number | null
@@ -66,30 +95,55 @@ export interface PersonaInput {
 
 interface PersonaPayload {
   name: string
-  systemPrompt: string
+  template: PersonaTemplate
   description?: string
-  customInstructions?: string
   conversationModelId?: number
   scoringModelId?: number
   scoreCriteria?: ScoreCriterionInput[]
 }
 
+// Optional template fields are omitted (not sent blank) so the backend schema,
+// which marks them `.optional()`, treats them as absent.
+const OPTIONAL_TEMPLATE_KEYS = [
+  'customerName',
+  'productContext',
+  'hiddenDetails',
+  'behaviorNotes',
+  'additionalInstructions',
+] as const
+
+/** Trim required fields; drop blank optional fields entirely. */
+function buildTemplatePayload(t: PersonaTemplate): PersonaTemplate {
+  const out: PersonaTemplate = {
+    customerProfile: t.customerProfile.trim(),
+    company: t.company.trim(),
+    issue: t.issue.trim(),
+    channel: t.channel,
+    emotion: t.emotion,
+    intensity: t.intensity,
+    desiredOutcome: t.desiredOutcome.trim(),
+    resolutionCriteria: t.resolutionCriteria.trim(),
+  }
+  for (const key of OPTIONAL_TEMPLATE_KEYS) {
+    const value = t[key]?.trim()
+    if (value) out[key] = value
+  }
+  return out
+}
+
 /**
- * Strip optional fields the API rejects as empty: blank `description` /
- * `customInstructions` (omitted, not sent as ''), unset model roles (omitted
- * so the default model resolves), and rubric rows with a blank name (the
- * backend `ScoreCriterionSchema` requires `name.min(1)`). An empty rubric is
- * omitted entirely.
+ * Strip optional fields the API rejects as empty: blank `description` (omitted),
+ * unset model roles (omitted so the default model resolves), blank optional
+ * template fields, and rubric rows with a blank name (`name.min(1)`). An empty
+ * rubric is omitted entirely.
  */
 export function buildPersonaPayload(input: PersonaInput): PersonaPayload {
   const payload: PersonaPayload = {
     name: input.name.trim(),
-    systemPrompt: input.systemPrompt.trim(),
+    template: buildTemplatePayload(input.template),
   }
   const description = input.description?.trim()
   if (description) payload.description = description
-  const customInstructions = input.customInstructions?.trim()
-  if (customInstructions) payload.customInstructions = customInstructions
   if (input.conversationModelId != null) {
     payload.conversationModelId = input.conversationModelId
   }

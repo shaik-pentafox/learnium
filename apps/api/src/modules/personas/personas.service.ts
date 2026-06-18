@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../core/database/prisma.service';
 import { NotFoundException } from '../../core/errors/domain.errors';
+import { renderSystemPrompt } from '../../core/llm/persona-prompt.template';
 import type { CreatePersonaDto, UpdatePersonaDto, PersonaQueryDto } from './dto/persona.dto';
 
 const PERSONA_INCLUDE = {
@@ -66,15 +67,17 @@ export class PersonasService {
   }
 
   async create(dto: CreatePersonaDto, createdById: number) {
-    const { scoreCriteria, ...personaData } = dto;
+    const { scoreCriteria } = dto;
+    // Render the runtime prompt cache from the structured template (source of truth).
+    const systemPrompt = renderSystemPrompt(dto.template);
 
     return this.prisma.$transaction(async (tx) => {
       const persona = await tx.persona.create({
         data: {
           name: dto.name,
-          systemPrompt: dto.systemPrompt,
+          templateData: dto.template as unknown as Prisma.InputJsonValue,
+          systemPrompt,
           ...(dto.description !== undefined ? { description: dto.description } : {}),
-          ...(dto.customInstructions !== undefined ? { customInstructions: dto.customInstructions } : {}),
           ...(dto.voiceStyleId !== undefined ? { voiceStyleId: dto.voiceStyleId } : {}),
           ...(dto.conversationModelId !== undefined ? { conversationModelId: dto.conversationModelId } : {}),
           ...(dto.scoringModelId !== undefined ? { scoringModelId: dto.scoringModelId } : {}),
@@ -110,6 +113,9 @@ export class PersonasService {
         version: nextVersion,
         systemPrompt: existing.systemPrompt,
         customInstructions: existing.customInstructions,
+        ...(existing.templateData != null
+          ? { templateData: existing.templateData as Prisma.InputJsonValue }
+          : {}),
         snapshotData: existing as unknown as Prisma.InputJsonValue,
         createdById: updatedById,
       },
@@ -120,8 +126,11 @@ export class PersonasService {
     const data: Prisma.PersonaUncheckedUpdateInput = { updatedById };
     if (personaData.name !== undefined) data.name = personaData.name;
     if (personaData.description !== undefined) data.description = personaData.description;
-    if (personaData.systemPrompt !== undefined) data.systemPrompt = personaData.systemPrompt;
-    if (personaData.customInstructions !== undefined) data.customInstructions = personaData.customInstructions;
+    // Re-render the prompt cache when the structured template changes.
+    if (personaData.template !== undefined) {
+      data.templateData = personaData.template as unknown as Prisma.InputJsonValue;
+      data.systemPrompt = renderSystemPrompt(personaData.template);
+    }
     if ('voiceStyleId' in personaData) data.voiceStyleId = personaData.voiceStyleId ?? null;
     if ('conversationModelId' in personaData) data.conversationModelId = personaData.conversationModelId ?? null;
     if ('scoringModelId' in personaData) data.scoringModelId = personaData.scoringModelId ?? null;

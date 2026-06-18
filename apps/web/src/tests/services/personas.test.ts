@@ -8,6 +8,7 @@ import {
   updatePersona,
   buildPersonaPayload,
   personaKeys,
+  type PersonaTemplate,
 } from '@/services/personas'
 import { useAuthStore } from '@/stores/auth'
 import { queryKeys } from '@/lib/query-keys'
@@ -22,6 +23,17 @@ function ok<T>(data: T) {
   return HttpResponse.json({ status: 'success', message: 'OK', data, meta: {} })
 }
 
+const tpl: PersonaTemplate = {
+  customerProfile: 'Premium subscriber',
+  company: 'Nimbus',
+  issue: 'double charge',
+  channel: 'chat',
+  emotion: 'frustrated',
+  intensity: 4,
+  desiredOutcome: 'refund',
+  resolutionCriteria: 'refund confirmed',
+}
+
 describe('personas api', () => {
   it('listMyPersonas returns the personas payload', async () => {
     server.use(
@@ -34,15 +46,16 @@ describe('personas api', () => {
     expect(result.personas[0].name).toBe('Coach')
   })
 
-  it('getPersona returns the full persona', async () => {
+  it('getPersona returns the full persona incl. templateData', async () => {
     server.use(
       http.get('*/api/v1/personas/7', () =>
-        ok({ id: 7, name: 'Angry Customer', systemPrompt: 'You are angry.' }),
+        ok({ id: 7, name: 'Angry Customer', templateData: tpl, systemPrompt: 'rendered' }),
       ),
     )
     const result = await getPersona(7)
     expect(result.id).toBe(7)
-    expect(result.systemPrompt).toBe('You are angry.')
+    expect(result.templateData?.company).toBe('Nimbus')
+    expect(result.systemPrompt).toBe('rendered')
   })
 
   it('personaKeys compose off the root namespace', () => {
@@ -52,20 +65,44 @@ describe('personas api', () => {
 })
 
 describe('buildPersonaPayload', () => {
-  const base = { name: 'Angry Customer', systemPrompt: 'You are angry.', scoreCriteria: [] }
+  const base = { name: 'Angry Customer', template: tpl, scoreCriteria: [] }
 
-  it('trims name/systemPrompt and omits blank optionals', () => {
+  it('trims name + required template fields and omits a blank description', () => {
     const payload = buildPersonaPayload({
       ...base,
       name: '  Angry Customer  ',
-      systemPrompt: '  You are angry.  ',
       description: '   ',
-      customInstructions: '',
+      template: { ...tpl, company: '  Nimbus  ', issue: '  double charge  ' },
     })
     expect(payload.name).toBe('Angry Customer')
-    expect(payload.systemPrompt).toBe('You are angry.')
+    expect(payload.template.company).toBe('Nimbus')
+    expect(payload.template.issue).toBe('double charge')
     expect(payload).not.toHaveProperty('description')
-    expect(payload).not.toHaveProperty('customInstructions')
+  })
+
+  it('drops blank optional template fields but keeps present ones', () => {
+    const payload = buildPersonaPayload({
+      ...base,
+      template: {
+        ...tpl,
+        customerName: '   ',
+        productContext: '',
+        hiddenDetails: '  switched plans  ',
+      },
+    })
+    expect(payload.template).not.toHaveProperty('customerName')
+    expect(payload.template).not.toHaveProperty('productContext')
+    expect(payload.template.hiddenDetails).toBe('switched plans')
+  })
+
+  it('preserves channel, emotion and intensity', () => {
+    const payload = buildPersonaPayload({
+      ...base,
+      template: { ...tpl, channel: 'audio', emotion: 'angry', intensity: 5 },
+    })
+    expect(payload.template.channel).toBe('audio')
+    expect(payload.template.emotion).toBe('angry')
+    expect(payload.template.intensity).toBe(5)
   })
 
   it('omits unset model roles so the default model resolves', () => {
@@ -111,21 +148,18 @@ describe('buildPersonaPayload', () => {
 })
 
 describe('persona mutations', () => {
-  it('createPersona POSTs the built payload', async () => {
+  const base = { name: 'Angry Customer', template: tpl, scoreCriteria: [] }
+
+  it('createPersona POSTs the built payload with the template', async () => {
     server.use(
       http.post('*/api/v1/personas', async ({ request }) => {
         const body = (await request.json()) as Record<string, unknown>
         expect(body.name).toBe('Angry Customer')
-        expect(body).not.toHaveProperty('description')
-        return ok({ id: 12, name: body.name, systemPrompt: body.systemPrompt })
+        expect((body.template as PersonaTemplate).issue).toBe('double charge')
+        return ok({ id: 12, name: body.name, templateData: body.template })
       }),
     )
-    const result = await createPersona({
-      name: 'Angry Customer',
-      systemPrompt: 'You are angry.',
-      description: '',
-      scoreCriteria: [],
-    })
+    const result = await createPersona(base)
     expect(result.id).toBe(12)
   })
 
@@ -134,14 +168,10 @@ describe('persona mutations', () => {
       http.patch('*/api/v1/personas/12', async ({ request }) => {
         const body = (await request.json()) as Record<string, unknown>
         expect(body.name).toBe('Calmer Customer')
-        return ok({ id: 12, name: body.name, systemPrompt: body.systemPrompt })
+        return ok({ id: 12, name: body.name })
       }),
     )
-    const result = await updatePersona(12, {
-      name: 'Calmer Customer',
-      systemPrompt: 'You are mildly annoyed.',
-      scoreCriteria: [],
-    })
+    const result = await updatePersona(12, { ...base, name: 'Calmer Customer' })
     expect(result.name).toBe('Calmer Customer')
   })
 })

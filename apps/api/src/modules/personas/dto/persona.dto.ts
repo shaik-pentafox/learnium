@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { PersonaTemplateSchema } from '../../../core/llm/persona-prompt.template';
 
 export const ScoreCriterionSchema = z.object({
   name: z.string().min(1).max(100),
@@ -11,8 +12,9 @@ export const ScoreCriterionSchema = z.object({
 export const CreatePersonaDtoSchema = z.object({
   name: z.string().min(1).max(200),
   description: z.string().optional(),
-  systemPrompt: z.string().min(1),
-  customInstructions: z.string().optional(),
+  // Trainers supply structured template fields; the runtime systemPrompt is
+  // rendered from these (see core/llm/persona-prompt.template). No raw prompt.
+  template: PersonaTemplateSchema,
   voiceStyleId: z.number().int().positive().optional(),
   conversationModelId: z.number().int().positive().optional(),
   scoringModelId: z.number().int().positive().optional(),
@@ -22,8 +24,7 @@ export const CreatePersonaDtoSchema = z.object({
 export const UpdatePersonaDtoSchema = z.object({
   name: z.string().min(1).max(200).optional(),
   description: z.string().optional(),
-  systemPrompt: z.string().min(1).optional(),
-  customInstructions: z.string().optional(),
+  template: PersonaTemplateSchema.optional(),
   voiceStyleId: z.number().int().positive().nullable().optional(),
   conversationModelId: z.number().int().positive().nullable().optional(),
   scoringModelId: z.number().int().positive().nullable().optional(),

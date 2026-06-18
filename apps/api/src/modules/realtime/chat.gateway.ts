@@ -15,6 +15,10 @@ import { REDIS_CLIENT } from '../../core/redis/redis.module';
 import { ModelFactoryService } from '../../core/llm/model-factory.service';
 import { CheckpointerService } from '../../core/llm/checkpointer.service';
 import { buildRoleplayGraph } from '../../core/llm/roleplay-graph';
+import {
+  PersonaTemplateSchema,
+  renderSystemPrompt,
+} from '../../core/llm/persona-prompt.template';
 import { ScoringService } from '../../core/llm/scoring.service';
 import { SessionRegistry } from './session-registry';
 
@@ -59,6 +63,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
           select: {
             id: true,
             name: true,
+            templateData: true,
             systemPrompt: true,
             conversationModelId: true,
           },
@@ -75,17 +80,25 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       return;
     }
 
+    // Render the live system prompt from the structured template each session, so
+    // master-template improvements reach every persona (cache is the fallback).
+    const systemPrompt = this.resolveSystemPrompt(session.persona);
+
     // Build the per-session roleplay graph: registry model (+ fallbacks) + system
     // prompt, durable state via the shared PostgresSaver (thread_id = session uid).
     let graph;
     try {
       const resolved = await this.models.resolve(session.persona.conversationModelId);
+      this.logger.debug(
+        `Resolved model "${resolved.name}" for session ${sessionUid} (persona ${session.persona.name})`,
+      );
       graph = buildRoleplayGraph(
         resolved.chat,
-        session.persona.systemPrompt,
+        systemPrompt,
         this.checkpointer.saver,
       );
-    } catch {
+    } catch (err) {
+      this.logger.warn({ err }, `Model resolve failed for session ${sessionUid}`);
       this.close(
         client,
         4503,
@@ -107,7 +120,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       type: 'joined',
       sessionId: session.uid,
       personaName: session.persona.name,
-      systemPrompt: session.persona.systemPrompt,
+      systemPrompt,
     });
 
     client.on('message', (raw: RawData) => void this.onMessage(client, raw));
@@ -115,6 +128,17 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
   handleDisconnect(client: WebSocket): void {
     this.registry.remove(client);
+  }
+
+  /** Live system prompt for a session: render from the persona's structured
+   *  template (so master-template changes propagate), falling back to the stored
+   *  rendered cache if `templateData` is missing or malformed (legacy personas). */
+  private resolveSystemPrompt(persona: {
+    systemPrompt: string;
+    templateData: unknown;
+  }): string {
+    const parsed = PersonaTemplateSchema.safeParse(persona.templateData);
+    return parsed.success ? renderSystemPrompt(parsed.data) : persona.systemPrompt;
   }
 
   private async onMessage(client: WebSocket, raw: RawData): Promise<void> {
@@ -159,6 +183,10 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       this.sendError(client, 'INVALID_PAYLOAD', 'content required');
       return;
     }
+
+    this.logger.debug(
+      `Turn received (${content.length} chars) for session ${wsClient.sessionUid}`,
+    );
 
     await this.prisma.chatMessage.create({
       data: { sessionId: wsClient.sessionDbId, role: 'user', content },
@@ -208,6 +236,10 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       buffer = buffer.replace(END_SENTINEL, '');
     }
     emit(buffer);
+
+    this.logger.debug(
+      `Turn streamed ${fullContent.length} chars for session ${wsClient.sessionUid}${ended ? ' (ended)' : ''}`,
+    );
 
     const saved = await this.prisma.chatMessage.create({
       data: { sessionId: wsClient.sessionDbId, role: 'assistant', content: fullContent.trim() },
@@ -299,6 +331,8 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
   }
 
   private close(client: WebSocket, code: number, reason: string): void {
+    // Handshake rejections are otherwise invisible server-side — log why.
+    this.logger.warn(`WS connection rejected (${code}): ${reason}`);
     client.close(code, reason);
   }
 }

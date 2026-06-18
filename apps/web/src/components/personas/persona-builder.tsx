@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
-import { Plus, Trash2, Rocket, UserSquare2 } from 'lucide-react'
+import { Plus, Trash2, Rocket, UserSquare2, MessagesSquare, Target } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
@@ -20,23 +20,48 @@ import {
   createPersona,
   updatePersona,
   personaKeys,
+  CHANNELS,
+  EMOTIONS,
   type Persona,
   type PersonaInput,
+  type PersonaTemplate,
   type ScoreCriterionInput,
 } from '@/services/personas'
 
-/** Tone presets fold into `customInstructions` — they are NOT the deferred
- *  TTS `voiceStyleId`. Selecting one appends a tone hint to the prompt. */
-const TONES = [
-  { key: 'professional', label: 'Professional', desc: 'Formal, objective, and precise.' },
-  { key: 'friendly', label: 'Friendly', desc: 'Empathetic, casual, and encouraging.' },
-  { key: 'assertive', label: 'Assertive', desc: 'Direct, challenging, and concise.' },
-] as const
+const EMOTION_LABELS: Record<(typeof EMOTIONS)[number], string> = {
+  calm: 'Calm',
+  confused: 'Confused',
+  frustrated: 'Frustrated',
+  angry: 'Angry',
+  anxious: 'Anxious',
+}
 
-const TONE_HINT: Record<string, string> = {
-  professional: 'Maintain a professional tone: formal, objective, and precise.',
-  friendly: 'Maintain a friendly tone: empathetic, casual, and encouraging.',
-  assertive: 'Maintain an assertive tone: direct, challenging, and concise.',
+const CHANNEL_LABELS: Record<(typeof CHANNELS)[number], string> = {
+  chat: 'Text chat',
+  audio: 'Voice call',
+}
+
+function emptyTemplate(): PersonaTemplate {
+  return {
+    customerName: '',
+    customerProfile: '',
+    company: '',
+    productContext: '',
+    issue: '',
+    channel: 'chat',
+    emotion: 'frustrated',
+    intensity: 3,
+    desiredOutcome: '',
+    hiddenDetails: '',
+    behaviorNotes: '',
+    resolutionCriteria: '',
+    additionalInstructions: '',
+  }
+}
+
+function toTemplate(persona?: Persona): PersonaTemplate {
+  if (!persona?.templateData) return emptyTemplate()
+  return { ...emptyTemplate(), ...persona.templateData }
 }
 
 interface CriterionRow extends ScoreCriterionInput {
@@ -67,8 +92,7 @@ export function PersonaBuilder({ persona }: { persona?: Persona }) {
 
   const [name, setName] = useState(persona?.name ?? '')
   const [description, setDescription] = useState(persona?.description ?? '')
-  const [systemPrompt, setSystemPrompt] = useState(persona?.systemPrompt ?? '')
-  const [tone, setTone] = useState<string>('professional')
+  const [template, setTemplate] = useState<PersonaTemplate>(() => toTemplate(persona))
   const [conversationModelId, setConversationModelId] = useState<string>(
     persona?.conversationModelId != null ? String(persona.conversationModelId) : '',
   )
@@ -84,12 +108,15 @@ export function PersonaBuilder({ persona }: { persona?: Persona }) {
     enabled: isAdmin,
   })
 
+  function setField<K extends keyof PersonaTemplate>(key: K, value: PersonaTemplate[K]) {
+    setTemplate((prev) => ({ ...prev, [key]: value }))
+  }
+
   function buildInput(): PersonaInput {
     return {
       name,
       description,
-      systemPrompt,
-      customInstructions: TONE_HINT[tone],
+      template,
       conversationModelId: conversationModelId ? Number(conversationModelId) : null,
       scoringModelId: scoringModelId ? Number(scoringModelId) : null,
       scoreCriteria: criteria,
@@ -112,8 +139,7 @@ export function PersonaBuilder({ persona }: { persona?: Persona }) {
   const launch = useMutation({
     mutationFn: async (input: PersonaInput) => {
       const saved = isEdit ? await updatePersona(persona.id, input) : await createPersona(input)
-      const session = await startSession(saved.id)
-      return session
+      return startSession(saved.id)
     },
     onSuccess: (session) => {
       queryClient.invalidateQueries({ queryKey: personaKeys.mine() })
@@ -123,7 +149,13 @@ export function PersonaBuilder({ persona }: { persona?: Persona }) {
   })
 
   const busy = save.isPending || launch.isPending
-  const canSave = name.trim().length > 0 && systemPrompt.trim().length > 0
+  const canSave =
+    name.trim().length > 0 &&
+    template.customerProfile.trim().length > 0 &&
+    template.company.trim().length > 0 &&
+    template.issue.trim().length > 0 &&
+    template.desiredOutcome.trim().length > 0 &&
+    template.resolutionCriteria.trim().length > 0
 
   function setRow(key: string, patch: Partial<CriterionRow>) {
     setCriteria((prev) => prev.map((r) => (r.key === key ? { ...r, ...patch } : r)))
@@ -144,58 +176,176 @@ export function PersonaBuilder({ persona }: { persona?: Persona }) {
             {isEdit ? 'Edit persona' : 'Persona builder'}
           </h1>
           <p className="text-sm text-muted-foreground">
-            Define the character your trainees roleplay against.
+            Describe the customer your support trainees will roleplay against. The
+            system prompt is generated from these fields.
           </p>
         </header>
 
-        <Section title="Identity definition" icon={<UserSquare2 className="size-4" />}>
-          <Field label="Persona name">
+        <Section title="Persona" icon={<UserSquare2 className="size-4" />}>
+          <Field label="Persona name" hint="Internal label shown in lists.">
             <Input
               value={name}
               onChange={(e) => setName(e.target.value)}
               required
-              placeholder="e.g., Senior Security Architect"
+              placeholder="e.g., Double-charged Dana"
             />
           </Field>
-          <Field label="Short description" hint="A one-line summary of their role.">
+          <Field label="Short description" hint="One line summarising the scenario.">
             <Input
               value={description}
               onChange={(e) => setDescription(e.target.value)}
-              placeholder="Brief summary of their role…"
+              placeholder="Billing dispute, frustrated premium customer…"
             />
           </Field>
         </Section>
 
-        <Section title="Voice style" hint="Tone hint added to the prompt.">
-          <div className="grid gap-3 sm:grid-cols-3">
-            {TONES.map((t) => (
-              <button
-                key={t.key}
-                type="button"
-                onClick={() => setTone(t.key)}
-                aria-pressed={tone === t.key}
-                className={`rounded-lg border p-3 text-left transition-colors ${
-                  tone === t.key
-                    ? 'border-primary bg-primary/10'
-                    : 'border-border bg-surface hover:bg-muted'
-                }`}
-              >
-                <div className="text-sm font-medium">{t.label}</div>
-                <div className="mt-0.5 text-xs text-muted-foreground">{t.desc}</div>
-              </button>
-            ))}
+        <Section title="The customer" icon={<UserSquare2 className="size-4" />}>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Field label="Customer name" hint="Optional, used in character.">
+              <Input
+                value={template.customerName ?? ''}
+                onChange={(e) => setField('customerName', e.target.value)}
+                placeholder="e.g., Dana"
+              />
+            </Field>
+            <Field label="Company they contact">
+              <Input
+                value={template.company}
+                onChange={(e) => setField('company', e.target.value)}
+                required
+                placeholder="e.g., Nimbus Telecom"
+              />
+            </Field>
           </div>
+          <Field label="Customer profile" hint="Who they are / relationship to the company.">
+            <Input
+              value={template.customerProfile}
+              onChange={(e) => setField('customerProfile', e.target.value)}
+              required
+              placeholder="Premium subscriber for 3 years"
+            />
+          </Field>
+          <Field label="Product context" hint="Optional plan / order / device details.">
+            <Input
+              value={template.productContext ?? ''}
+              onChange={(e) => setField('productContext', e.target.value)}
+              placeholder="Unlimited plan, billed monthly"
+            />
+          </Field>
         </Section>
 
-        <Section title="System instructions">
-          <Textarea
-            value={systemPrompt}
-            onChange={(e) => setSystemPrompt(e.target.value)}
-            required
-            rows={10}
-            className="font-data"
-            placeholder={'You are a Senior Security Architect…\n\nRules:\n1. …\n\nEnd with [CONVERSATION_ENDED] when the scenario resolves.'}
-          />
+        <Section title="The scenario" icon={<MessagesSquare className="size-4" />}>
+          <Field label="Issue" hint="The problem that triggered the contact.">
+            <Textarea
+              value={template.issue}
+              onChange={(e) => setField('issue', e.target.value)}
+              required
+              rows={2}
+              placeholder="Charged twice for this month's bill."
+            />
+          </Field>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Field label="Channel">
+              <div className="flex gap-2">
+                {CHANNELS.map((c) => (
+                  <button
+                    key={c}
+                    type="button"
+                    onClick={() => setField('channel', c)}
+                    aria-pressed={template.channel === c}
+                    className={`flex-1 rounded-md border px-3 py-2 text-sm transition-colors ${
+                      template.channel === c
+                        ? 'border-primary bg-primary/10 font-medium'
+                        : 'border-border bg-surface hover:bg-muted'
+                    }`}
+                  >
+                    {CHANNEL_LABELS[c]}
+                  </button>
+                ))}
+              </div>
+            </Field>
+            <Field label="Emotion">
+              <Select
+                value={template.emotion}
+                onValueChange={(v) => setField('emotion', v as PersonaTemplate['emotion'])}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {EMOTIONS.map((e) => (
+                    <SelectItem key={e} value={e}>
+                      {EMOTION_LABELS[e]}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </Field>
+          </div>
+          <Field label={`Intensity — ${template.intensity}/5`} hint="How strong the emotion is.">
+            <input
+              type="range"
+              min={1}
+              max={5}
+              step={1}
+              value={template.intensity}
+              onChange={(e) => setField('intensity', Number(e.target.value))}
+              className="w-full accent-primary"
+              aria-label="Intensity"
+            />
+          </Field>
+        </Section>
+
+        <Section title="Goal & resolution" icon={<Target className="size-4" />}>
+          <Field label="Desired outcome" hint="What resolution the customer wants.">
+            <Input
+              value={template.desiredOutcome}
+              onChange={(e) => setField('desiredOutcome', e.target.value)}
+              required
+              placeholder="A refund of the duplicate charge"
+            />
+          </Field>
+          <Field
+            label="Resolution criteria"
+            hint="When the customer is satisfied and ends the chat (drives [CONVERSATION_ENDED])."
+          >
+            <Input
+              value={template.resolutionCriteria}
+              onChange={(e) => setField('resolutionCriteria', e.target.value)}
+              required
+              placeholder="The agent confirms the duplicate charge will be refunded"
+            />
+          </Field>
+        </Section>
+
+        <Section title="Difficulty (optional)">
+          <Field
+            label="Hidden details"
+            hint="Facts the customer reveals only when the agent asks the right questions."
+          >
+            <Textarea
+              value={template.hiddenDetails ?? ''}
+              onChange={(e) => setField('hiddenDetails', e.target.value)}
+              rows={2}
+              placeholder="You switched plans mid-cycle, which may be related."
+            />
+          </Field>
+          <Field label="Behaviour notes" hint="Curveballs: threatens to cancel, talks over the agent…">
+            <Textarea
+              value={template.behaviorNotes ?? ''}
+              onChange={(e) => setField('behaviorNotes', e.target.value)}
+              rows={2}
+              placeholder="You mention switching to a competitor if this isn't fixed."
+            />
+          </Field>
+          <Field label="Additional instructions" hint="Extra nuance, folded into the prompt.">
+            <Textarea
+              value={template.additionalInstructions ?? ''}
+              onChange={(e) => setField('additionalInstructions', e.target.value)}
+              rows={2}
+              placeholder="You are short on time and say so early."
+            />
+          </Field>
         </Section>
 
         <Section
@@ -218,7 +368,7 @@ export function PersonaBuilder({ persona }: { persona?: Persona }) {
                 <Input
                   value={row.name}
                   onChange={(e) => setRow(row.key, { name: e.target.value })}
-                  placeholder="Criterion (e.g., Objection handling)"
+                  placeholder="Criterion (e.g., De-escalation)"
                   className="flex-1"
                 />
                 <Input
@@ -269,16 +419,13 @@ export function PersonaBuilder({ persona }: { persona?: Persona }) {
             </Section>
           )}
 
-          <Section title="Parameters" hint="Not yet applied — coming soon.">
-            <div className="space-y-3 opacity-50">
-              <Field label="Temperature">
-                <Input type="range" min={0} max={2} step={0.1} defaultValue={0.7} disabled />
-              </Field>
-              <Field label="Max tokens">
-                <Input type="number" defaultValue={2048} disabled />
-              </Field>
-            </div>
-          </Section>
+          {isEdit && persona?.systemPrompt && (
+            <Section title="Rendered prompt" hint="Read-only preview of the generated system prompt.">
+              <pre className="max-h-72 overflow-auto whitespace-pre-wrap rounded-md bg-muted p-3 font-data text-xs text-muted-foreground">
+                {persona.systemPrompt}
+              </pre>
+            </Section>
+          )}
 
           <div className="space-y-2">
             <Button type="submit" size="lg" className="w-full" disabled={!canSave || busy}>

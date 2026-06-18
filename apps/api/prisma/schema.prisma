@@ -137,6 +137,9 @@ model Persona {
   id                  Int              @id @default(autoincrement())
   name                String
   description         String?
+  // Structured authoring fields (source of truth). The runtime prompt is
+  // rendered from these; `systemPrompt` is a rendered cache kept for preview.
+  templateData        Json?
   systemPrompt        String
   customInstructions  String?
   voiceStyleId        Int?
@@ -163,6 +166,7 @@ model PersonaVersion {
   personaId          Int
   persona            Persona  @relation(fields: [personaId], references: [id])
   version            Int
+  templateData       Json?
   systemPrompt       String
   customInstructions String?
   snapshotData       Json

@@ -1,4 +1,5 @@
 import { http, HttpResponse } from 'msw'
+import type { PersonaTemplate } from '@/services/personas'
 
 const BASE = '/api/v1'
 
@@ -94,8 +95,8 @@ interface MockPersona {
   id: number
   name: string
   description?: string | null
+  templateData: PersonaTemplate
   systemPrompt: string
-  customInstructions?: string | null
   conversationModelId?: number | null
   scoringModelId?: number | null
   scoreCriteria: {
@@ -108,34 +109,46 @@ interface MockPersona {
   }[]
 }
 
+// Minimal stand-in for the backend renderSystemPrompt — enough for a preview.
+function renderMockPrompt(t: PersonaTemplate): string {
+  return [
+    'You are roleplaying as a CUSTOMER contacting a support agent. Stay in character.',
+    `You are contacting ${t.company} about: ${t.issue}`,
+    `You feel ${t.emotion} (${t.intensity}/5). You want: ${t.desiredOutcome}.`,
+    `When ${t.resolutionCriteria}, thank the agent and end with [CONVERSATION_ENDED].`,
+  ].join('\n\n')
+}
+
+const SEED_TEMPLATE: PersonaTemplate = {
+  customerProfile: 'Premium subscriber for 3 years',
+  company: 'Nimbus Telecom',
+  issue: 'charged twice for this month bill',
+  channel: 'chat',
+  emotion: 'frustrated',
+  intensity: 4,
+  desiredOutcome: 'a refund of the duplicate charge',
+  resolutionCriteria: 'the agent confirms the duplicate charge will be refunded',
+}
+
 let MOCK_PERSONAS: MockPersona[] = [
   {
-    id: 1, name: 'Objection Handler',
-    description: 'A skeptical buyer who pushes back on price and value.',
-    systemPrompt: 'You are a skeptical enterprise buyer. End with [CONVERSATION_ENDED] when satisfied.',
+    id: 1, name: 'Double-charged Dana',
+    description: 'A frustrated premium customer disputing a duplicate charge.',
+    templateData: SEED_TEMPLATE,
+    systemPrompt: renderMockPrompt(SEED_TEMPLATE),
     scoreCriteria: [
-      { id: 1, name: 'Rapport', maxScore: 10, weight: 1, order: 0 },
-      { id: 2, name: 'Objection handling', maxScore: 20, weight: 2, order: 1 },
-    ],
-  },
-  {
-    id: 2, name: 'Angry Customer',
-    description: 'An upset customer escalating a support complaint.',
-    systemPrompt: 'You are a frustrated customer whose order arrived broken. End with [CONVERSATION_ENDED] once de-escalated.',
-    scoreCriteria: [
-      { id: 3, name: 'Empathy', maxScore: 10, weight: 2, order: 0 },
-      { id: 4, name: 'Resolution', maxScore: 10, weight: 1, order: 1 },
+      { id: 1, name: 'Empathy', maxScore: 10, weight: 2, order: 0 },
+      { id: 2, name: 'Resolution', maxScore: 20, weight: 2, order: 1 },
     ],
   },
 ]
-let nextPersonaId = 3
-let nextCriterionId = 5
+let nextPersonaId = 2
+let nextCriterionId = 3
 
 interface PersonaBody {
   name: string
   description?: string
-  systemPrompt: string
-  customInstructions?: string
+  template: PersonaTemplate
   conversationModelId?: number
   scoringModelId?: number
   scoreCriteria?: { name: string; description?: string; maxScore: number; weight: number; order: number }[]
@@ -474,15 +487,16 @@ export const handlers = [
       return fail('UNAUTHORIZED', 'Missing credentials', 401)
     }
     const body = (await request.json()) as PersonaBody
-    if (!body?.name?.trim() || !body?.systemPrompt?.trim()) {
-      return fail('VALIDATION_ERROR', 'name and systemPrompt are required', 400)
+    const t = body?.template
+    if (!body?.name?.trim() || !t?.issue?.trim() || !t?.company?.trim()) {
+      return fail('VALIDATION_ERROR', 'name and template fields are required', 400)
     }
     const persona: MockPersona = {
       id: nextPersonaId++,
       name: body.name,
       description: body.description ?? null,
-      systemPrompt: body.systemPrompt,
-      customInstructions: body.customInstructions ?? null,
+      templateData: t,
+      systemPrompt: renderMockPrompt(t),
       conversationModelId: body.conversationModelId ?? null,
       scoringModelId: body.scoringModelId ?? null,
       scoreCriteria: (body.scoreCriteria ?? []).map((c) => ({
@@ -513,8 +527,9 @@ export const handlers = [
       ...existing,
       ...(body.name !== undefined ? { name: body.name } : {}),
       ...(body.description !== undefined ? { description: body.description } : {}),
-      ...(body.systemPrompt !== undefined ? { systemPrompt: body.systemPrompt } : {}),
-      ...(body.customInstructions !== undefined ? { customInstructions: body.customInstructions } : {}),
+      ...(body.template !== undefined
+        ? { templateData: body.template, systemPrompt: renderMockPrompt(body.template) }
+        : {}),
       ...(body.conversationModelId !== undefined ? { conversationModelId: body.conversationModelId } : {}),
       ...(body.scoringModelId !== undefined ? { scoringModelId: body.scoringModelId } : {}),
       ...(body.scoreCriteria !== undefined
