@@ -49,6 +49,18 @@ const HEARTBEAT_MS = 25_000
 const MAX_BACKOFF_MS = 10_000
 const BASE_BACKOFF_MS = 500
 
+/** ws(s):// origin of the backend. Derived from VITE_API_URL when set (direct
+ *  mode), otherwise the current page host (legacy vite-proxy mode). */
+function realtimeOrigin(): string {
+  const apiUrl = import.meta.env.VITE_API_URL
+  if (apiUrl) {
+    const u = new URL(apiUrl)
+    return `${u.protocol === 'https:' ? 'wss' : 'ws'}://${u.host}`
+  }
+  const proto = window.location.protocol === 'https:' ? 'wss' : 'ws'
+  return `${proto}://${window.location.host}`
+}
+
 /**
  * Roleplay WebSocket channel. Implements the backend resume contract: ticket
  * auth in the query string, ping/pong heartbeat, and exponential-backoff
@@ -110,8 +122,7 @@ export class RoleplayChannel {
     }
     if (this.closedByCaller) return
 
-    const proto = window.location.protocol === 'https:' ? 'wss' : 'ws'
-    const url = `${proto}://${window.location.host}/api/v1/realtime/chat?ticket=${encodeURIComponent(
+    const url = `${realtimeOrigin()}/api/v1/realtime/chat?ticket=${encodeURIComponent(
       ticket,
     )}&sessionId=${encodeURIComponent(this.sessionUid)}`
 

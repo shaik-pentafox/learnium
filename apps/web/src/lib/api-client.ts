@@ -34,8 +34,12 @@ interface ErrorEnvelope {
   details?: unknown
 }
 
+// Direct backend URL (CORS) when VITE_API_URL is set; else the relative path
+// (legacy vite-proxy mode).
+export const API_BASE_URL = import.meta.env.VITE_API_URL ?? '/api/v1'
+
 const http: AxiosInstance = axios.create({
-  baseURL: '/api/v1',
+  baseURL: API_BASE_URL,
   headers: { 'Content-Type': 'application/json' },
 })
 
@@ -60,7 +64,7 @@ async function refreshAccessToken(): Promise<string | null> {
   try {
     const res = await axios.post<
       SuccessEnvelope<{ accessToken: string; refreshToken: string }>
-    >('/api/v1/auth/refresh', { refreshToken })
+    >(`${API_BASE_URL}/auth/refresh`, { refreshToken })
     const tokens = res.data.data
     useAuthStore.getState().setTokens(tokens)
     return tokens.accessToken
