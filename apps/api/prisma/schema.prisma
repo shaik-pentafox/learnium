@@ -161,6 +161,7 @@ model Persona {
   description         String?
   // Hex accent color for the persona's chat orb/avatar (e.g. "#6366f1").
   color               String?
+  isPublished         Boolean   @default(false)
   // Structured authoring fields (source of truth). The runtime prompt is
   // rendered from these; `systemPrompt` is a rendered cache kept for preview.
   templateData        Json?
@@ -229,6 +230,7 @@ model Session {
   persona   Persona       @relation(fields: [personaId], references: [id])
   status    String        @default("ACTIVE") // ACTIVE | COMPLETED | ABANDONED
   feedback  String?
+  isSimulation Boolean       @default(false)
   startedAt DateTime      @default(now())
   endedAt   DateTime?
   createdAt DateTime      @default(now())
