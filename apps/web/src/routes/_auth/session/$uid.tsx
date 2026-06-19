@@ -6,6 +6,7 @@ import type { ChannelStatus } from '@/lib/ws-client'
 import type { ChatMessage } from '@/features/roleplay/use-roleplay-session'
 import { personaOrbColors } from '@/lib/persona-color'
 import { notify } from '@/lib/toast'
+import { useAuthStore } from '@/stores/auth'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Orb, type AgentState } from '@/components/chat/orb'
@@ -15,7 +16,7 @@ import {
   ConversationScrollButton,
 } from '@/components/chat/conversation'
 
-export const Route = createFileRoute('/_auth/practice/$uid')({
+export const Route = createFileRoute('/_auth/session/$uid')({
   component: ChatSession,
 })
 
@@ -28,6 +29,8 @@ interface ScoreRow {
 
 function ChatSession() {
   const { uid } = Route.useParams()
+  const role = useAuthStore((s) => s.user?.role ?? 'USER')
+  const backTo = role === 'USER' ? '/arena' : '/personas'
   const session = useRoleplaySession(uid)
   const [draft, setDraft] = useState('')
   const lastError = useRef<string | null>(null)
@@ -110,8 +113,8 @@ function ChatSession() {
       {/* Composer (voice-ready shell — mic slot reserved) */}
       {session.ended ? (
         <div className="pt-3">
-          <Link to="/practice" className="text-sm text-primary hover:underline">
-            ← Back to personas
+          <Link to={backTo} className="text-sm text-primary hover:underline">
+            ← Back
           </Link>
         </div>
       ) : (

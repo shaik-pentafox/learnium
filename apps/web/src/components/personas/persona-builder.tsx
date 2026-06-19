@@ -161,11 +161,11 @@ export function PersonaBuilder({ persona }: { persona?: Persona }) {
   const launch = useMutation({
     mutationFn: async (input: PersonaInput) => {
       const saved = isEdit ? await updatePersona(persona.id, input) : await createPersona(input)
-      return startSession(saved.id)
+      return startSession(saved.id, { simulation: true })
     },
     onSuccess: (session) => {
       queryClient.invalidateQueries({ queryKey: personaKeys.mine() })
-      navigate({ to: '/practice/$uid', params: { uid: session.uid } })
+      navigate({ to: '/session/$uid', params: { uid: session.uid } })
     },
     onError: () => notify.error('Could not launch session'),
   })

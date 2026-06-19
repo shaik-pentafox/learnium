@@ -1,4 +1,4 @@
-import { createFileRoute, useNavigate } from '@tanstack/react-router'
+import { createFileRoute, redirect, useNavigate } from '@tanstack/react-router'
 import { useQuery, useMutation } from '@tanstack/react-query'
 import {
   listMyPersonas,
@@ -8,10 +8,17 @@ import {
 import { startSession } from '@/services/roleplay'
 import { personaOrbColors } from '@/lib/persona-color'
 import { notify } from '@/lib/toast'
+import { useAuthStore } from '@/stores/auth'
 import { Button } from '@/components/ui/button'
 import { Orb } from '@/components/chat/orb'
 
-export const Route = createFileRoute('/_auth/practice/')({
+export const Route = createFileRoute('/_auth/arena/')({
+  beforeLoad: () => {
+    // Arena is the trainee launcher; trainers/admins manage personas elsewhere.
+    if ((useAuthStore.getState().user?.role ?? 'USER') !== 'USER') {
+      throw redirect({ to: '/dashboard' })
+    }
+  },
   component: PracticeLauncher,
 })
 
@@ -25,7 +32,7 @@ function PracticeLauncher() {
   const start = useMutation({
     mutationFn: (personaId: number) => startSession(personaId),
     onSuccess: ({ uid }) =>
-      navigate({ to: '/practice/$uid', params: { uid } }),
+      navigate({ to: '/session/$uid', params: { uid } }),
     onError: (err) => notify.error(err),
   })
 

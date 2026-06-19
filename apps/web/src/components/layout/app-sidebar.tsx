@@ -35,7 +35,7 @@ const ALL: UserRole[] = ['SUPER_ADMIN', 'TRAINER', 'USER']
 // Most targets land in F1+; Dashboard, Practice and LLM Ops route today.
 const NAV: NavItem[] = [
   { label: 'Dashboard', to: '/dashboard', icon: LayoutDashboard, roles: ALL },
-  { label: 'Practice', to: '/practice', icon: MessagesSquare, roles: ALL },
+  { label: 'Arena', to: '/arena', icon: MessagesSquare, roles: ['USER'] },
   {
     label: 'Personas',
     to: '/personas',
