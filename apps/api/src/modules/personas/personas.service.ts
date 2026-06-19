@@ -265,8 +265,8 @@ export class PersonasService {
     });
   }
 
-  async getVersions(personaId: number) {
-    await this.loadOrThrow(personaId);
+  async getVersions(personaId: number, actor: { sub: number; role: string }) {
+    await this.findById(personaId, actor);
     return this.prisma.personaVersion.findMany({
       where: { personaId },
       orderBy: { version: 'desc' },
@@ -274,8 +274,8 @@ export class PersonasService {
     });
   }
 
-  async getVersion(personaId: number, version: number) {
-    await this.loadOrThrow(personaId);
+  async getVersion(personaId: number, version: number, actor: { sub: number; role: string }) {
+    await this.findById(personaId, actor);
     const v = await this.prisma.personaVersion.findUnique({
       where: { personaId_version: { personaId, version } },
     });

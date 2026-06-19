@@ -35,21 +35,21 @@ export class PersonasController {
 
   @Get('my')
   async myPersonas(@CurrentUser() user: JwtPayload) {
-    return this.personasService.myPersonas(user.sub, user.role);
+    return this.personasService.myPersonas({ sub: user.sub, role: user.role });
   }
 
   @Get()
   @Permissions('personas:read')
-  async list(@Query() query: unknown) {
+  async list(@Query() query: unknown, @CurrentUser() actor: JwtPayload) {
     const result = PersonaQueryDtoSchema.safeParse(query);
     if (!result.success) throw new ValidationException('Invalid query', result.error.issues);
-    return this.personasService.list(result.data);
+    return this.personasService.list(result.data, { sub: actor.sub, role: actor.role });
   }
 
   @Get(':id/versions')
   @Permissions('personas:read')
-  async getVersions(@Param('id', ParseIntPipe) id: number) {
-    return this.personasService.getVersions(id);
+  async getVersions(@Param('id', ParseIntPipe) id: number, @CurrentUser() actor: JwtPayload) {
+    return this.personasService.getVersions(id, { sub: actor.sub, role: actor.role });
   }
 
   @Get(':id/versions/:v')
@@ -57,14 +57,15 @@ export class PersonasController {
   async getVersion(
     @Param('id', ParseIntPipe) id: number,
     @Param('v', ParseIntPipe) v: number,
+    @CurrentUser() actor: JwtPayload,
   ) {
-    return this.personasService.getVersion(id, v);
+    return this.personasService.getVersion(id, v, { sub: actor.sub, role: actor.role });
   }
 
   @Get(':id')
   @Permissions('personas:read')
-  async findOne(@Param('id', ParseIntPipe) id: number) {
-    return this.personasService.findById(id);
+  async findOne(@Param('id', ParseIntPipe) id: number, @CurrentUser() actor: JwtPayload) {
+    return this.personasService.findById(id, { sub: actor.sub, role: actor.role });
   }
 
   @Post()
@@ -75,17 +76,30 @@ export class PersonasController {
     return this.personasService.create(result.data, actor.sub);
   }
 
+  @Post(':id/publish')
+  @Permissions('personas:write')
+  async publish(@Param('id', ParseIntPipe) id: number, @CurrentUser() actor: JwtPayload) {
+    return this.personasService.publish(id, { sub: actor.sub, role: actor.role });
+  }
+
+  @Post(':id/unpublish')
+  @Permissions('personas:write')
+  async unpublish(@Param('id', ParseIntPipe) id: number, @CurrentUser() actor: JwtPayload) {
+    return this.personasService.unpublish(id, { sub: actor.sub, role: actor.role });
+  }
+
   @Post(':id/enhance')
   @Permissions('personas:write')
   async enhance(
     @Param('id', ParseIntPipe) id: number,
     @Body() body: unknown,
     @Res() reply: FastifyReply,
+    @CurrentUser() actor: JwtPayload,
   ) {
     const result = EnhanceDtoSchema.safeParse(body ?? {});
     if (!result.success) throw new ValidationException('Invalid enhance payload', result.error.issues);
 
-    const persona = await this.personasService.findById(id);
+    const persona = await this.personasService.findById(id, { sub: actor.sub, role: actor.role });
     const source = result.data.field === 'customInstructions'
       ? (persona.customInstructions ?? persona.systemPrompt)
       : persona.systemPrompt;
@@ -134,13 +148,13 @@ export class PersonasController {
   ) {
     const result = UpdatePersonaDtoSchema.safeParse(body);
     if (!result.success) throw new ValidationException('Invalid persona payload', result.error.issues);
-    return this.personasService.update(id, result.data, actor.sub);
+    return this.personasService.update(id, result.data, { sub: actor.sub, role: actor.role });
   }
 
   @Delete(':id')
   @HttpCode(HttpStatus.NO_CONTENT)
   @Permissions('personas:delete')
   async remove(@Param('id', ParseIntPipe) id: number, @CurrentUser() actor: JwtPayload) {
-    await this.personasService.softDelete(id, actor.sub);
+    await this.personasService.softDelete(id, { sub: actor.sub, role: actor.role });
   }
 }
