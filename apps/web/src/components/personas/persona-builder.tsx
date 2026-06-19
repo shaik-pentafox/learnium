@@ -25,6 +25,8 @@ import { startSession } from '@/services/roleplay'
 import {
   createPersona,
   updatePersona,
+  publishPersona,
+  unpublishPersona,
   personaKeys,
   CHANNELS,
   EMOTIONS,
@@ -132,8 +134,8 @@ export function PersonaBuilder({ persona }: { persona?: Persona }) {
   }
 
   const save = useMutation({
-    mutationFn: (input: PersonaInput) =>
-      isEdit ? updatePersona(persona.id, input) : createPersona(input),
+    mutationFn: ({ input, publish }: { input: PersonaInput; publish?: boolean }) =>
+      isEdit ? updatePersona(persona.id, input) : createPersona(input, publish),
     onSuccess: (saved) => {
       queryClient.invalidateQueries({ queryKey: personaKeys.mine() })
       queryClient.invalidateQueries({ queryKey: personaKeys.detail(saved.id) })
@@ -141,6 +143,18 @@ export function PersonaBuilder({ persona }: { persona?: Persona }) {
       navigate({ to: '/personas' })
     },
     onError: () => notify.error('Could not save persona'),
+  })
+
+  // Edit mode only: flip published visibility without re-saving content.
+  const togglePublish = useMutation({
+    mutationFn: () =>
+      persona!.isPublished ? unpublishPersona(persona!.id) : publishPersona(persona!.id),
+    onSuccess: (saved) => {
+      queryClient.invalidateQueries({ queryKey: personaKeys.mine() })
+      queryClient.invalidateQueries({ queryKey: personaKeys.detail(saved.id) })
+      notify.success(saved.isPublished ? 'Persona published' : 'Persona unpublished')
+    },
+    onError: () => notify.error('Could not change publish state'),
   })
 
   // Launch = save, then open a roleplay session against the saved persona.
@@ -156,7 +170,7 @@ export function PersonaBuilder({ persona }: { persona?: Persona }) {
     onError: () => notify.error('Could not launch session'),
   })
 
-  const busy = save.isPending || launch.isPending
+  const busy = save.isPending || launch.isPending || togglePublish.isPending
   const canSave =
     name.trim().length > 0 &&
     template.customerProfile.trim().length > 0 &&
@@ -174,7 +188,7 @@ export function PersonaBuilder({ persona }: { persona?: Persona }) {
       className="mx-auto flex max-w-6xl flex-col gap-6 lg:flex-row"
       onSubmit={(e) => {
         e.preventDefault()
-        if (canSave) save.mutate(buildInput())
+        if (canSave) save.mutate({ input: buildInput() })
       }}
     >
       {/* ── Main column ───────────────────────────────────────────── */}
@@ -458,12 +472,55 @@ export function PersonaBuilder({ persona }: { persona?: Persona }) {
           )}
 
           <div className="space-y-2">
-            <Button type="submit" size="lg" className="w-full" disabled={!canSave || busy}>
-              {save.isPending ? 'Saving…' : isEdit ? 'Save changes' : 'Create persona'}
-            </Button>
+            {isEdit ? (
+              <>
+                <Button type="submit" size="lg" className="w-full" disabled={!canSave || busy}>
+                  {save.isPending ? 'Saving…' : 'Save changes'}
+                </Button>
+                <Button
+                  type="button"
+                  variant={persona?.isPublished ? 'secondary' : 'primary'}
+                  size="lg"
+                  className="w-full"
+                  disabled={busy}
+                  onClick={() => togglePublish.mutate()}
+                >
+                  {togglePublish.isPending
+                    ? 'Working…'
+                    : persona?.isPublished
+                      ? 'Unpublish'
+                      : 'Publish'}
+                </Button>
+              </>
+            ) : (
+              <>
+                <Button
+                  type="submit"
+                  size="lg"
+                  className="w-full"
+                  disabled={!canSave || busy}
+                >
+                  {save.isPending && save.variables?.publish !== true
+                    ? 'Saving…'
+                    : 'Save as draft'}
+                </Button>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="lg"
+                  className="w-full"
+                  disabled={!canSave || busy}
+                  onClick={() => save.mutate({ input: buildInput(), publish: true })}
+                >
+                  {save.isPending && save.variables?.publish === true
+                    ? 'Publishing…'
+                    : 'Save & publish'}
+                </Button>
+              </>
+            )}
             <Button
               type="button"
-              variant="secondary"
+              variant="ghost"
               size="lg"
               className="w-full"
               disabled={!canSave || busy}
