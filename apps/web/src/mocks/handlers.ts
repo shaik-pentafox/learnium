@@ -497,6 +497,21 @@ export const handlers = [
     })
   }),
 
+  http.get(`${BASE}/sessions/:uid`, ({ request, params }) => {
+    if (!request.headers.get('Authorization')) {
+      return fail('UNAUTHORIZED', 'Missing credentials', 401)
+    }
+    return ok({
+      id: 101,
+      uid: String(params.uid),
+      status: 'ACTIVE',
+      isSimulation: false,
+      persona: { id: 1, name: 'Double-charged Dana' },
+      startedAt: new Date().toISOString(),
+      endedAt: null,
+    })
+  }),
+
   http.get(`${BASE}/personas/:id`, ({ request, params }) => {
     if (!request.headers.get('Authorization')) {
       return fail('UNAUTHORIZED', 'Missing credentials', 401)

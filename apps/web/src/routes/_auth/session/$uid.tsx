@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { createFileRoute, Link } from '@tanstack/react-router'
-import { SendHorizonal, Mic } from 'lucide-react'
+import { useQuery } from '@tanstack/react-query'
+import { SendHorizonal, Mic, FlaskConical } from 'lucide-react'
+import { getSession, sessionKeys } from '@/services/sessions'
 import { useRoleplaySession } from '@/features/roleplay/use-roleplay-session'
 import type { ChannelStatus } from '@/lib/ws-client'
 import type { ChatMessage } from '@/features/roleplay/use-roleplay-session'
@@ -31,6 +33,11 @@ function ChatSession() {
   const { uid } = Route.useParams()
   const role = useAuthStore((s) => s.user?.role ?? 'USER')
   const backTo = role === 'USER' ? '/arena' : '/personas'
+  const detail = useQuery({
+    queryKey: sessionKeys.detail(uid),
+    queryFn: () => getSession(uid),
+  })
+  const isSimulation = detail.data?.isSimulation === true
   const session = useRoleplaySession(uid)
   const [draft, setDraft] = useState('')
   const lastError = useRef<string | null>(null)
@@ -87,6 +94,13 @@ function ChatSession() {
           </Button>
         )}
       </header>
+
+      {isSimulation && (
+        <div className="mb-3 flex items-center gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm font-medium text-amber-700 dark:text-amber-400">
+          <FlaskConical className="size-4 shrink-0" />
+          Simulation — persona test session, not a graded trainee session.
+        </div>
+      )}
 
       {/* Transcript */}
       <Conversation className="rounded-xl border border-border bg-surface">
