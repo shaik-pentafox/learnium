@@ -18,6 +18,7 @@ export const CreatePersonaDtoSchema = z.object({
   description: z.string().optional(),
   // Accent color for the persona's chat orb (#RRGGBB).
   color: HexColorSchema.optional(),
+  isPublished: z.boolean().optional(),
   // Trainers supply structured template fields; the runtime systemPrompt is
   // rendered from these (see core/llm/persona-prompt.template). No raw prompt.
   template: PersonaTemplateSchema,
