@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 export const StartSessionDtoSchema = z.object({
   personaId: z.number().int().positive(),
+  simulation: z.boolean().optional(),
 });
 
 export const SessionQueryDtoSchema = z.object({

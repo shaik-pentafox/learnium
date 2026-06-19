@@ -15,7 +15,7 @@ export class SessionsController {
   async start(@Body() body: unknown, @CurrentUser() actor: JwtPayload) {
     const result = StartSessionDtoSchema.safeParse(body);
     if (!result.success) throw new ValidationException('Invalid session payload', result.error.issues);
-    return this.sessionsService.start(result.data, actor.sub);
+    return this.sessionsService.start(result.data, { sub: actor.sub, role: actor.role });
   }
 
   @Get()

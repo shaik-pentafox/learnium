@@ -5,6 +5,7 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../core/database/prisma.service';
 import { NotFoundException, ForbiddenException } from '../../core/errors/domain.errors';
 import type { StartSessionDto, SessionQueryDto, MessageQueryDto } from './dto/session.dto';
+import { superAdminUserIds, canTraineeAccess } from '../personas/persona-access';
 
 export const SCORE_SESSION_QUEUE = 'score-session';
 
@@ -15,18 +16,43 @@ export class SessionsService {
     @InjectQueue(SCORE_SESSION_QUEUE) private readonly scoreQueue: Queue,
   ) {}
 
-  async start(dto: StartSessionDto, userId: number) {
+  async start(dto: StartSessionDto, actor: { sub: number; role: string }) {
     const persona = await this.prisma.persona.findUnique({
       where: { id: dto.personaId, isDeleted: false },
+      select: { id: true, isPublished: true, isDeleted: true, createdById: true },
     });
     if (!persona) throw new NotFoundException('Persona', dto.personaId);
 
+    let isSimulation = false;
+    if (actor.role === 'USER') {
+      const [supervisorId, superAdminIds] = await Promise.all([
+        this.prisma.user
+          .findUnique({ where: { id: actor.sub }, select: { supervisorId: true } })
+          .then((u) => u?.supervisorId ?? null),
+        superAdminUserIds(this.prisma),
+      ]);
+      if (!canTraineeAccess(persona, supervisorId, superAdminIds)) {
+        throw new ForbiddenException('Persona not available');
+      }
+    } else {
+      // TRAINER / SUPER_ADMIN: test/simulation session against own (trainer) or any (admin) persona.
+      if (actor.role === 'TRAINER' && persona.createdById !== actor.sub) {
+        throw new ForbiddenException('You can only test your own personas');
+      }
+      isSimulation = dto.simulation ?? true;
+    }
+
     const session = await this.prisma.session.create({
-      data: { userId, personaId: dto.personaId },
-      select: { id: true, uid: true, startedAt: true, personaId: true, status: true },
+      data: { userId: actor.sub, personaId: dto.personaId, isSimulation },
+      select: { id: true, uid: true, startedAt: true, isSimulation: true },
     });
 
-    return { sessionId: session.id, uid: session.uid, startedAt: session.startedAt };
+    return {
+      sessionId: session.id,
+      uid: session.uid,
+      startedAt: session.startedAt,
+      isSimulation: session.isSimulation,
+    };
   }
 
   async list(query: SessionQueryDto, actorId: number, role: string) {
