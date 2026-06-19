@@ -100,6 +100,7 @@ interface MockPersona {
   systemPrompt: string
   conversationModelId?: number | null
   scoringModelId?: number | null
+  isPublished?: boolean
   scoreCriteria: {
     id: number
     name: string
@@ -153,6 +154,7 @@ interface PersonaBody {
   template: PersonaTemplate
   conversationModelId?: number
   scoringModelId?: number
+  isPublished?: boolean
   scoreCriteria?: { name: string; description?: string; maxScore: number; weight: number; order: number }[]
 }
 
@@ -287,7 +289,7 @@ export const handlers = [
     if (!request.headers.get('Authorization')) {
       return fail('UNAUTHORIZED', 'Missing credentials', 401)
     }
-    const body = (await request.json()) as { personaId?: number }
+    const body = (await request.json()) as { personaId?: number; simulation?: boolean }
     if (!body?.personaId) {
       return fail('VALIDATION_ERROR', 'personaId required', 400)
     }
@@ -299,6 +301,7 @@ export const handlers = [
           sessionId: 101,
           uid: crypto.randomUUID(),
           startedAt: new Date().toISOString(),
+          isSimulation: body.simulation ?? false,
         },
         meta: meta(),
       },
@@ -522,6 +525,7 @@ export const handlers = [
       systemPrompt: renderMockPrompt(t),
       conversationModelId: body.conversationModelId ?? null,
       scoringModelId: body.scoringModelId ?? null,
+      isPublished: body.isPublished ?? false,
       scoreCriteria: (body.scoreCriteria ?? []).map((c) => ({
         id: nextCriterionId++,
         name: c.name,
@@ -569,6 +573,30 @@ export const handlers = [
           }
         : {}),
     }
+    MOCK_PERSONAS = MOCK_PERSONAS.map((p) => (p.id === id ? updated : p))
+    return ok(updated)
+  }),
+
+  http.post(`${BASE}/personas/:id/publish`, ({ request, params }) => {
+    if (!request.headers.get('Authorization')) {
+      return fail('UNAUTHORIZED', 'Missing credentials', 401)
+    }
+    const id = Number(params.id)
+    const existing = MOCK_PERSONAS.find((p) => p.id === id)
+    if (!existing) return fail('NOT_FOUND', `Persona ${id} not found`, 404)
+    const updated: MockPersona = { ...existing, isPublished: true }
+    MOCK_PERSONAS = MOCK_PERSONAS.map((p) => (p.id === id ? updated : p))
+    return ok(updated)
+  }),
+
+  http.post(`${BASE}/personas/:id/unpublish`, ({ request, params }) => {
+    if (!request.headers.get('Authorization')) {
+      return fail('UNAUTHORIZED', 'Missing credentials', 401)
+    }
+    const id = Number(params.id)
+    const existing = MOCK_PERSONAS.find((p) => p.id === id)
+    if (!existing) return fail('NOT_FOUND', `Persona ${id} not found`, 404)
+    const updated: MockPersona = { ...existing, isPublished: false }
     MOCK_PERSONAS = MOCK_PERSONAS.map((p) => (p.id === id ? updated : p))
     return ok(updated)
   }),

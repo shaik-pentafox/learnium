@@ -44,6 +44,7 @@ export interface PersonaSummary {
   name: string
   description?: string | null
   color?: string | null
+  isPublished?: boolean
 }
 
 export interface Persona {
@@ -59,6 +60,8 @@ export interface Persona {
   conversationModelId?: number | null
   scoringModelId?: number | null
   scoreCriteria?: ScoreCriterion[]
+  /** Whether the persona is visible to trainees. */
+  isPublished?: boolean
 }
 
 interface MyPersonasData {
@@ -66,7 +69,7 @@ interface MyPersonasData {
   total: number
 }
 
-/** GET /personas/my — trainee sees their assigned persona; trainer/admin see all. */
+/** GET /personas/my — trainee: published personas of own trainer or super admin; trainer/admin: own/all. */
 export async function listMyPersonas(): Promise<MyPersonasData> {
   return apiGet<MyPersonasData>('/personas/my')
 }
@@ -106,6 +109,7 @@ interface PersonaPayload {
   conversationModelId?: number
   scoringModelId?: number
   scoreCriteria?: ScoreCriterionInput[]
+  isPublished?: boolean
 }
 
 // Optional template fields are omitted (not sent blank) so the backend schema,
@@ -143,11 +147,15 @@ function buildTemplatePayload(t: PersonaTemplate): PersonaTemplate {
  * template fields, and rubric rows with a blank name (`name.min(1)`). An empty
  * rubric is omitted entirely.
  */
-export function buildPersonaPayload(input: PersonaInput): PersonaPayload {
+export function buildPersonaPayload(
+  input: PersonaInput,
+  isPublished?: boolean,
+): PersonaPayload {
   const payload: PersonaPayload = {
     name: input.name.trim(),
     template: buildTemplatePayload(input.template),
   }
+  if (isPublished !== undefined) payload.isPublished = isPublished
   const description = input.description?.trim()
   if (description) payload.description = description
   const color = input.color?.trim()
@@ -176,8 +184,21 @@ export function buildPersonaPayload(input: PersonaInput): PersonaPayload {
 }
 
 /** POST /personas — author a new persona (personas:write). */
-export async function createPersona(input: PersonaInput): Promise<Persona> {
-  return apiPost<Persona>('/personas', buildPersonaPayload(input))
+export async function createPersona(
+  input: PersonaInput,
+  publish = false,
+): Promise<Persona> {
+  return apiPost<Persona>('/personas', buildPersonaPayload(input, publish))
+}
+
+/** POST /personas/:id/publish — make visible to trainees (owner/admin only). */
+export async function publishPersona(id: number): Promise<Persona> {
+  return apiPost<Persona>(`/personas/${id}/publish`, {})
+}
+
+/** POST /personas/:id/unpublish — hide from trainees again. */
+export async function unpublishPersona(id: number): Promise<Persona> {
+  return apiPost<Persona>(`/personas/${id}/unpublish`, {})
 }
 
 /** PATCH /personas/:id — update an existing persona (snapshots a version). */

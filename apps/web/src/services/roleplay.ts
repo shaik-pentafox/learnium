@@ -4,11 +4,18 @@ export interface StartedSession {
   sessionId: number
   uid: string
   startedAt: string
+  isSimulation?: boolean
 }
 
 /** POST /sessions { personaId } → new ACTIVE session (thread for the roleplay). */
-export async function startSession(personaId: number): Promise<StartedSession> {
-  return apiPost<StartedSession>('/sessions', { personaId })
+export async function startSession(
+  personaId: number,
+  opts?: { simulation?: boolean },
+): Promise<StartedSession> {
+  return apiPost<StartedSession>('/sessions', {
+    personaId,
+    ...(opts?.simulation ? { simulation: true } : {}),
+  })
 }
 
 /** POST /auth/realtime/ticket → single-use ticket for the WS handshake. */
