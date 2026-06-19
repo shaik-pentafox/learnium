@@ -98,11 +98,46 @@ A reusable helper centralizes both forms:
 - Legacy `User.assignedPersonaId` 1:1 relation is left in the schema (not
   removed) but no longer used for trainee visibility. Removal is out of scope.
 
+## Arena (trainee section) + owner Test flow
+
+The trainee-facing area is named **Arena** (route `/arena`, renamed from the
+existing `/practice`). It lists the trainee's *visible published* personas (the
+visibility rule above) and starts a roleplay session — the current practice flow,
+unchanged in behavior.
+
+- **Arena is trainee-only.** Sidebar nav entry `roles: ['USER']`; the route is
+  role-guarded (redirect non-`USER` away). Admin/trainer do **not** see Arena —
+  they own personas and test them from the Personas tab.
+- **Owner test flow.** On the Personas list (`/personas`), next to **Edit**, add
+  a **Test** button (trainer/super admin). It starts a *demo/test* session
+  against that persona — including unpublished **drafts** — and opens the chat.
+- **Test vs trainee sessions are distinguished.** Today all sessions are common.
+  Add `Session.isSimulation Boolean @default(false)`. Owner test sessions set it
+  true; trainee Arena sessions stay false. This keeps owner tests out of trainee
+  analytics/leaderboards later (analytics is F11, not built yet — the flag is the
+  hook, exclusion logic deferred). The chat page shows an unmistakable
+  **simulation banner** when `isSimulation` is true.
+
+### Session start authorization (role-aware)
+
+`SessionsService.start(dto, user)` gains a `simulation?: boolean` input and
+enforces:
+
+| Caller role | `simulation` | Allowed persona |
+|-------------|-------------|-----------------|
+| `USER` | forced `false` | only personas passing the trainee visibility rule (published, own trainer or super admin). Else `ForbiddenException`. |
+| `TRAINER` | may be `true` | only **own** personas (`createdById == self`), any state incl. draft. Else `ForbiddenException`. |
+| `SUPER_ADMIN` | may be `true` | any persona, any state. |
+
+`simulation` is set server-side from role + request; it is persisted on the
+session row and never re-derived later.
+
 ## Backend changes
 
 ### Schema + migration
 - Add `Persona.isPublished Boolean @default(false)`.
-- Prisma migration `add_persona_published`.
+- Add `Session.isSimulation Boolean @default(false)`.
+- Prisma migration `add_persona_published_and_session_simulation`.
 
 ### `PersonasService`
 - `myPersonas(user)`:
@@ -128,11 +163,16 @@ A reusable helper centralizes both forms:
 - `CreatePersonaDtoSchema` gains optional `isPublished: boolean` (default false).
 
 ### `SessionsService.start`
-- Before creating the session, for role `USER` enforce the trainee visibility
-  predicate against `dto.personaId`; trainer/super admin may start against own /
-  any (simulation). Reject with `ForbiddenException` otherwise.
+- Add `simulation` input + role-aware authorization (see table above). Persist
+  `isSimulation` on the session row. `userId` on a simulation session is the
+  trainer/admin (the tester).
 
 ## Frontend changes
+
+### Navigation + routing
+- Rename `/practice` → `/arena`; sidebar entry `roles: ['USER']` (was Practice,
+  ALL). Route guard redirects non-trainees.
+- Personas tab stays `roles: ['SUPER_ADMIN', 'TRAINER']` (unchanged).
 
 ### `apps/web/src/services/personas.ts`
 - Add `isPublished` to `Persona` / `PersonaSummary` / payload types.
@@ -140,15 +180,25 @@ A reusable helper centralizes both forms:
 - `publishPersona(id)` / `unpublishPersona(id)` calling the new endpoints.
 - Fix the stale `listMyPersonas` comment ("assigned persona" → visibility rule).
 
+### `apps/web/src/services/roleplay.ts` (session start)
+- `startSession(personaId, { simulation })` so the persona Test button can flag
+  a simulation session.
+
 ### `apps/web/src/components/personas/persona-builder.tsx`
 - Replace the single submit button with **Save as draft** and **Save & publish**.
 - Edit mode: a publish/unpublish toggle reflecting current `isPublished`.
 
 ### `apps/web/src/routes/_auth/personas/index.tsx`
 - Draft / Published badge per persona row.
+- **Test** button (beside Edit) → starts a simulation session against that
+  persona → navigate to the chat.
 
-### Practice page
-- No change (already array-ready). Verify it now shows the visible personas.
+### Arena page (`apps/web/src/routes/_auth/arena/index.tsx`, was practice/)
+- Trainee-only; lists visible published personas (already array-ready). Verify it
+  shows the visible personas.
+
+### Chat page
+- Show a **simulation banner** when the session `isSimulation` is true.
 
 ## Testing
 
@@ -157,11 +207,17 @@ A reusable helper centralizes both forms:
   trainee (under any trainer) sees it; trainee cannot `findById` / `start` an
   unpublished or other-trainer persona (403); trainer cannot edit/publish a
   super admin persona; super admin sees all.
-- Frontend: builder save-as-draft vs save-&-publish; badge renders; practice
-  list populates.
+- Session start: trainer Test on own draft → `isSimulation=true` session opens;
+  trainer cannot test another trainer's persona; trainee cannot pass
+  `simulation:true`.
+- Frontend: builder save-as-draft vs save-&-publish; badge renders; Arena hidden
+  from admin/trainer and visible to trainee; Arena list populates; Personas Test
+  button starts a simulation session with banner.
 
 ## Out of scope
 
 - `publishedVersion` / version pinning.
 - Removing `User.assignedPersonaId`.
 - Transitive supervisor chains (single-level supervisor only).
+- Analytics/leaderboard exclusion of simulation sessions (flag persisted now;
+  consuming it is F11 analytics work).
