@@ -1,7 +1,11 @@
 import { Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../core/database/prisma.service';
-import { NotFoundException, ForbiddenException } from '../../core/errors/domain.errors';
+import {
+  NotFoundException,
+  ForbiddenException,
+  ConflictException,
+} from '../../core/errors/domain.errors';
 import { renderSystemPrompt } from '../../core/llm/persona-prompt.template';
 import type { CreatePersonaDto, UpdatePersonaDto, PersonaQueryDto } from './dto/persona.dto';
 import {
@@ -67,7 +71,15 @@ export class PersonasService {
     if (actor.role === 'SUPER_ADMIN') {
       scope = { isDeleted: false };
     } else if (actor.role === 'TRAINER') {
-      scope = { isDeleted: false, createdById: actor.sub };
+      // Own personas + published super-admin personas (read-only to the trainer).
+      const superAdminIds = await superAdminUserIds(this.prisma);
+      scope = {
+        isDeleted: false,
+        OR: [
+          { createdById: actor.sub },
+          { isPublished: true, createdById: { in: superAdminIds } },
+        ],
+      };
     } else {
       const [supervisorId, superAdminIds] = await Promise.all([
         this.supervisorIdOf(actor.sub),
@@ -78,7 +90,7 @@ export class PersonasService {
 
     const where: Prisma.PersonaWhereInput = { AND: [scope, search] };
 
-    const [personas, total] = await Promise.all([
+    const [rows, total] = await Promise.all([
       this.prisma.persona.findMany({
         where,
         skip,
@@ -88,6 +100,12 @@ export class PersonasService {
       }),
       this.prisma.persona.count({ where }),
     ]);
+
+    // A trainer may only edit personas they own; super-admin's are read-only.
+    const personas = rows.map((p) => ({
+      ...p,
+      readonly: actor.role !== 'SUPER_ADMIN' && p.createdById !== actor.sub,
+    }));
 
     return { personas, total, page, limit, totalPages: Math.ceil(total / limit) };
   }
@@ -118,11 +136,20 @@ export class PersonasService {
       return this.list({ page: 1, limit: 100 }, user);
     }
     if (user.role === 'TRAINER') {
-      const personas = await this.prisma.persona.findMany({
-        where: { isDeleted: false, createdById: user.sub },
+      // Own personas (editable) + published super-admin personas (read-only, testable).
+      const superAdminIds = await superAdminUserIds(this.prisma);
+      const rows = await this.prisma.persona.findMany({
+        where: {
+          isDeleted: false,
+          OR: [
+            { createdById: user.sub },
+            { isPublished: true, createdById: { in: superAdminIds } },
+          ],
+        },
         include: PERSONA_INCLUDE,
         orderBy: { createdAt: 'desc' },
       });
+      const personas = rows.map((p) => ({ ...p, readonly: p.createdById !== user.sub }));
       return { personas, total: personas.length };
     }
     // Trainee (USER): published personas of own trainer or any super admin.
@@ -180,22 +207,6 @@ export class PersonasService {
     const existing = await this.loadOrThrow(id);
     await this.assertCanManage(existing.createdById, actor);
 
-    const nextVersion = await this.prisma.personaVersion.count({ where: { personaId: id } }) + 1;
-
-    await this.prisma.personaVersion.create({
-      data: {
-        personaId: id,
-        version: nextVersion,
-        systemPrompt: existing.systemPrompt,
-        customInstructions: existing.customInstructions,
-        ...(existing.templateData != null
-          ? { templateData: existing.templateData as Prisma.InputJsonValue }
-          : {}),
-        snapshotData: existing as unknown as Prisma.InputJsonValue,
-        createdById: actor.sub,
-      },
-    });
-
     const { scoreCriteria, ...personaData } = dto;
 
     const data: Prisma.PersonaUncheckedUpdateInput = { updatedById: actor.sub };
@@ -211,27 +222,82 @@ export class PersonasService {
     if ('conversationModelId' in personaData) data.conversationModelId = personaData.conversationModelId ?? null;
     if ('scoringModelId' in personaData) data.scoringModelId = personaData.scoringModelId ?? null;
 
-    const persona = await this.prisma.persona.update({
-      where: { id },
-      data,
-      include: PERSONA_INCLUDE,
-    });
-
+    // Reconcile the rubric in place: criteria with recorded scores are reused
+    // (kept linked to their ScoreResults) rather than dropped and recreated —
+    // a blind deleteMany hits the ScoreResult FK and 500s on any scored persona.
+    const existingCriteria = existing.scoreCriteria; // ordered by `order` asc
     if (scoreCriteria !== undefined) {
-      await this.prisma.scoreCriterion.deleteMany({ where: { personaId: id } });
-      if (scoreCriteria.length > 0) {
-        await this.prisma.scoreCriterion.createMany({
-          data: scoreCriteria.map((c) => ({
-            personaId: id,
-            name: c.name,
-            maxScore: c.maxScore,
-            weight: c.weight,
-            order: c.order,
-            ...(c.description !== undefined ? { description: c.description } : {}),
-          })),
+      const overlap = Math.min(existingCriteria.length, scoreCriteria.length);
+      const surplusIds = existingCriteria.slice(overlap).map((c) => c.id);
+      if (surplusIds.length > 0) {
+        const referenced = await this.prisma.scoreResult.count({
+          where: { criterionId: { in: surplusIds } },
         });
+        if (referenced > 0) {
+          throw new ConflictException(
+            'Cannot remove a scoring criterion that already has recorded scores. Keep it or edit it in place.',
+          );
+        }
       }
     }
+
+    const nextVersion =
+      (await this.prisma.personaVersion.count({ where: { personaId: id } })) + 1;
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.personaVersion.create({
+        data: {
+          personaId: id,
+          version: nextVersion,
+          systemPrompt: existing.systemPrompt,
+          customInstructions: existing.customInstructions,
+          ...(existing.templateData != null
+            ? { templateData: existing.templateData as Prisma.InputJsonValue }
+            : {}),
+          snapshotData: existing as unknown as Prisma.InputJsonValue,
+          createdById: actor.sub,
+        },
+      });
+
+      await tx.persona.update({ where: { id }, data });
+
+      if (scoreCriteria !== undefined) {
+        const overlap = Math.min(existingCriteria.length, scoreCriteria.length);
+        // Update the overlapping rows in place (preserves ids → score links).
+        for (let i = 0; i < overlap; i++) {
+          const c = scoreCriteria[i]!;
+          await tx.scoreCriterion.update({
+            where: { id: existingCriteria[i]!.id },
+            data: {
+              name: c.name,
+              maxScore: c.maxScore,
+              weight: c.weight,
+              order: c.order,
+              description: c.description ?? null,
+            },
+          });
+        }
+        // Create any additional rows beyond the existing count.
+        if (scoreCriteria.length > overlap) {
+          await tx.scoreCriterion.createMany({
+            data: scoreCriteria.slice(overlap).map((c) => ({
+              personaId: id,
+              name: c.name,
+              maxScore: c.maxScore,
+              weight: c.weight,
+              order: c.order,
+              ...(c.description !== undefined ? { description: c.description } : {}),
+            })),
+          });
+        }
+        // Drop surplus rows (already verified unreferenced above).
+        if (existingCriteria.length > overlap) {
+          await tx.scoreCriterion.deleteMany({
+            where: { id: { in: existingCriteria.slice(overlap).map((c) => c.id) } },
+          });
+        }
+      }
+    });
 
     return this.loadOrThrow(id);
   }
