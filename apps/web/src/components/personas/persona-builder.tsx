@@ -463,13 +463,13 @@ export function PersonaBuilder({ persona }: { persona?: Persona }) {
             </Section>
           )}
 
-          {isEdit && persona?.systemPrompt && (
+          {/* {isEdit && persona?.systemPrompt && (
             <Section title="Rendered prompt" hint="Read-only preview of the generated system prompt.">
               <pre className="max-h-72 overflow-auto whitespace-pre-wrap rounded-md bg-muted p-3 font-data text-xs text-muted-foreground">
                 {persona.systemPrompt}
               </pre>
             </Section>
-          )}
+          )} */}
 
           <div className="space-y-2">
             {isEdit ? (
