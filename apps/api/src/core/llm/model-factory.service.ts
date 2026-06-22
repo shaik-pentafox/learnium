@@ -13,6 +13,7 @@ import { decryptSecret } from '../crypto/crypto.util';
 import { DomainException } from '../errors/domain.errors';
 import { ErrorCode } from '@learnium/contracts';
 import type { Env } from '../config/env.schema';
+import { LlmFlowLogger } from './llm-flow.logger';
 
 /** Replicas publish here when the registry changes so every node drops its model cache. */
 export const MODEL_CACHE_CHANNEL = 'llm:model-cache:invalidate';
@@ -61,6 +62,7 @@ export class ModelFactoryService {
     private readonly prisma: PrismaService,
     private readonly config: ConfigService<Env, true>,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
+    private readonly flowLog: LlmFlowLogger,
   ) {
     this.sub = this.redis.duplicate();
     void this.sub.subscribe(MODEL_CACHE_CHANNEL).then(() => {
@@ -73,13 +75,29 @@ export class ModelFactoryService {
 
   /** Resolve a logical model id (or the default) to a usable chat model + fallbacks. */
   async resolve(modelId: number | null | undefined): Promise<ResolvedModel> {
-    const record = await this.loadModel(modelId);
-    const model = this.getOrBuild(record);
-    const fallbacks = await this.buildFallbacks(record.id);
-    const chat: ChatRunnable = fallbacks.length
-      ? model.withFallbacks({ fallbacks })
-      : model;
-    return { id: record.id, name: record.name, model, chat };
+    const span = this.flowLog.start('model_resolve', {
+      requestedModelId: modelId ?? null,
+    });
+    try {
+      const record = await this.loadModel(modelId);
+      const cacheHit = this.cache.has(record.id);
+      const model = this.getOrBuild(record);
+      const fallbacks = await this.buildFallbacks(record.id);
+      const chat: ChatRunnable = fallbacks.length
+        ? model.withFallbacks({ fallbacks })
+        : model;
+      span.complete({
+        resolvedModelId: record.id,
+        modelName: record.name,
+        providerType: record.provider.type,
+        fallbackCount: fallbacks.length,
+        cacheHit,
+      });
+      return { id: record.id, name: record.name, model, chat };
+    } catch (err) {
+      span.fail(err);
+      throw err;
+    }
   }
 
   private async loadModel(

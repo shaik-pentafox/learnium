@@ -18,6 +18,7 @@ import { CurrentUser, type JwtPayload } from '../../core/auth/decorators/current
 import { Permissions } from '../../core/auth/decorators/permissions.decorator';
 import { ValidationException } from '../../core/errors/domain.errors';
 import { ModelFactoryService } from '../../core/llm/model-factory.service';
+import { LlmFlowLogger, previewText } from '../../core/llm/llm-flow.logger';
 import { PersonasService } from './personas.service';
 import {
   CreatePersonaDtoSchema,
@@ -31,6 +32,7 @@ export class PersonasController {
   constructor(
     private readonly personasService: PersonasService,
     private readonly models: ModelFactoryService,
+    private readonly flowLog: LlmFlowLogger,
   ) {}
 
   @Get('my')
@@ -109,15 +111,30 @@ export class PersonasController {
       ? `Additional instruction: ${result.data.instruction}\n\nOriginal:\n${source}`
       : `Original:\n${source}`;
 
+    const span = this.flowLog.start('persona_enhance', {
+      personaId: id,
+      field: result.data.field,
+      inputChars: userMsg.length,
+      inputPreview: previewText(userMsg),
+    });
+
     // Resolve the default registry model before opening the SSE stream so a
     // missing-model error returns a clean 503 instead of a half-open stream.
-    const { chat } = await this.models.resolve(null);
+    let chat;
+    try {
+      ({ chat } = await this.models.resolve(null));
+    } catch (err) {
+      span.fail(err);
+      throw err;
+    }
 
     reply.raw.setHeader('Content-Type', 'text/event-stream');
     reply.raw.setHeader('Cache-Control', 'no-cache');
     reply.raw.setHeader('Connection', 'keep-alive');
     reply.raw.flushHeaders();
 
+    let outputChars = 0;
+    let chunkCount = 0;
     try {
       const stream = await chat.stream([
         new SystemMessage(systemMsg),
@@ -125,13 +142,17 @@ export class PersonasController {
       ]);
 
       for await (const chunk of stream) {
+        chunkCount++;
         const content =
           typeof chunk.content === 'string' ? chunk.content : '';
         if (content) {
+          outputChars += content.length;
           reply.raw.write(`data: ${JSON.stringify({ content })}\n\n`);
         }
       }
-    } catch {
+      span.complete({ outputChars, chunkCount });
+    } catch (err) {
+      span.fail(err, { outputChars, chunkCount });
       reply.raw.write(`data: ${JSON.stringify({ error: 'LLM unavailable' })}\n\n`);
     }
 

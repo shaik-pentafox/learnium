@@ -4,6 +4,7 @@ import { HumanMessage } from '@langchain/core/messages';
 import { PrismaService } from '../database/prisma.service';
 import { ModelFactoryService } from './model-factory.service';
 import { UsageService } from './usage.service';
+import { LlmFlowLogger, previewText } from './llm-flow.logger';
 
 export interface ScoreRow {
   criterionId: number;
@@ -39,6 +40,7 @@ export class ScoringService {
     private readonly prisma: PrismaService,
     private readonly models: ModelFactoryService,
     private readonly usage: UsageService,
+    private readonly flowLog: LlmFlowLogger,
   ) {}
 
   async scoreSession(sessionId: number): Promise<ScoringResult> {
@@ -50,14 +52,35 @@ export class ScoringService {
       },
     });
 
-    if (!session) return { scores: [], feedback: null };
+    if (!session) {
+      this.flowLog.step('scoring', 'session_not_found', { sessionId });
+      return { scores: [], feedback: null };
+    }
 
     const criteria = session.persona.scoreCriteria;
-    if (criteria.length === 0) return { scores: [], feedback: null };
+    if (criteria.length === 0) {
+      this.flowLog.step('scoring', 'no_criteria', {
+        sessionId,
+        sessionUid: session.uid,
+        personaId: session.persona.id,
+      });
+      return { scores: [], feedback: null };
+    }
 
     const transcript = session.messages
       .map((m) => `${m.role.toUpperCase()}: ${m.content}`)
       .join('\n');
+
+    const span = this.flowLog.start('scoring', {
+      sessionId,
+      sessionUid: session.uid,
+      personaId: session.persona.id,
+      scoringModelId: session.persona.scoringModelId,
+      messageCount: session.messages.length,
+      criteriaCount: criteria.length,
+      transcriptChars: transcript.length,
+      transcriptPreview: previewText(transcript),
+    });
 
     const criteriaText = criteria
       .map(
@@ -106,6 +129,13 @@ Return one score object per rubric criterion (use the exact criterionId shown), 
       }),
     ]);
 
+    span.complete({
+      scoredCriteria: scoreRows.filter((r) => r.score !== null).length,
+      totalCriteria: criteria.length,
+      hasOverallFeedback: Boolean(llmResult?.overallFeedback),
+      llmSucceeded: llmResult !== null,
+    });
+
     return { scores: scoreRows, feedback: llmResult?.overallFeedback ?? null };
   }
 
@@ -123,6 +153,7 @@ Return one score object per rubric criterion (use the exact criterionId shown), 
     try {
       resolved = await this.models.resolve(scoringModelId);
     } catch (err) {
+      this.flowLog.step('scoring', 'model_resolve_failed', { sessionId, scoringModelId });
       this.logger.error({ err }, 'No scoring model available');
       return null;
     }
@@ -130,7 +161,16 @@ Return one score object per rubric criterion (use the exact criterionId shown), 
     const startedAt = Date.now();
     // Structured output hides the raw message (no usage_metadata), so scoring
     // tokens are estimated from prompt + serialized result.
-    const recordUsage = (outputText: string): void => {
+    const recordUsage = (outputText: string, path: 'structured' | 'json_fallback'): void => {
+      this.flowLog.step('scoring', 'usage_recorded', {
+        sessionId,
+        modelId: resolved.id,
+        modelName: resolved.name,
+        path,
+        promptChars: prompt.length,
+        outputChars: outputText.length,
+        latencyMs: Date.now() - startedAt,
+      });
       void this.usage.record({
         kind: 'scoring',
         modelId: resolved.id,
@@ -144,15 +184,26 @@ Return one score object per rubric criterion (use the exact criterionId shown), 
     };
 
     try {
+      this.flowLog.step('scoring', 'structured_output_invoke', {
+        sessionId,
+        modelId: resolved.id,
+        modelName: resolved.name,
+        promptChars: prompt.length,
+      });
       const structured = resolved.model.withStructuredOutput(ScoringSchema, {
         name: 'scoring',
       });
       const result = (await structured.invoke([
         new HumanMessage(prompt),
       ])) as LlmScoringResponse;
-      recordUsage(JSON.stringify(result));
+      recordUsage(JSON.stringify(result), 'structured');
+      this.flowLog.step('scoring', 'structured_output_success', {
+        sessionId,
+        scoreCount: result.scores.length,
+      });
       return result;
     } catch (err) {
+      this.flowLog.step('scoring', 'structured_output_failed', { sessionId });
       this.logger.warn(
         { err },
         'Structured scoring failed — falling back to JSON parse',
@@ -160,6 +211,11 @@ Return one score object per rubric criterion (use the exact criterionId shown), 
     }
 
     try {
+      this.flowLog.step('scoring', 'json_fallback_invoke', {
+        sessionId,
+        modelId: resolved.id,
+        modelName: resolved.name,
+      });
       const resp = await resolved.model.invoke([
         new HumanMessage(
           `${prompt}\n\nReturn ONLY valid JSON: {"scores":[{"criterionId":<id>,"score":<n>,"feedback":"<s>"}],"overallFeedback":"<s>"}`,
@@ -169,13 +225,19 @@ Return one score object per rubric criterion (use the exact criterionId shown), 
         typeof resp.content === 'string'
           ? resp.content
           : JSON.stringify(resp.content);
-      recordUsage(text);
+      recordUsage(text, 'json_fallback');
       const cleaned = text
         .replace(/^```(?:json)?/i, '')
         .replace(/```$/, '')
         .trim();
-      return ScoringSchema.parse(JSON.parse(cleaned));
+      const parsed = ScoringSchema.parse(JSON.parse(cleaned));
+      this.flowLog.step('scoring', 'json_fallback_success', {
+        sessionId,
+        scoreCount: parsed.scores.length,
+      });
+      return parsed;
     } catch (err) {
+      this.flowLog.step('scoring', 'json_fallback_failed', { sessionId });
       this.logger.error({ err }, 'Scoring fallback JSON parse failed');
       return null;
     }

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { createFileRoute, Link } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
-import { SendHorizonal, Mic, FlaskConical } from 'lucide-react'
+import { SendHorizonal, Mic, FlaskConical, Info } from 'lucide-react'
 import { getSession, sessionKeys } from '@/services/sessions'
 import { useRoleplaySession } from '@/features/roleplay/use-roleplay-session'
 import type { ChannelStatus } from '@/lib/ws-client'
@@ -272,9 +272,13 @@ function ScoreReveal({
               key={s.criterionId}
               className="flex items-center justify-between gap-3 text-sm"
             >
+              <div>
+
               <span className="text-muted-foreground">
                 {s.name ?? `Criterion #${s.criterionId}`}
               </span>
+              <Info/>
+              </div>
               <span className="font-data tabular-nums">
                 {s.score ?? '—'} / {s.maxScore}
               </span>

@@ -5,6 +5,17 @@ import type { ChatRunnable } from './model-factory.service';
 
 export type RoleplayGraph = ReturnType<typeof buildRoleplayGraph>;
 
+export interface RoleplayGraphHooks {
+  onBeforeInvoke?: (ctx: {
+    messageCount: number;
+    systemPromptChars: number;
+  }) => void;
+  onAfterInvoke?: (ctx: {
+    outputChars: number;
+    latencyMs: number;
+  }) => void;
+}
+
 /**
  * Single-node roleplay graph: START → chatbot → END (ports the legacy LangGraph
  * shape). The system prompt + model are bound per session; the checkpointer carries
@@ -17,12 +28,26 @@ export function buildRoleplayGraph(
   chat: ChatRunnable,
   systemPrompt: string,
   checkpointer: PostgresSaver,
+  hooks?: RoleplayGraphHooks,
 ) {
   const callModel = async (state: typeof MessagesAnnotation.State) => {
+    hooks?.onBeforeInvoke?.({
+      messageCount: state.messages.length,
+      systemPromptChars: systemPrompt.length,
+    });
+    const startedAt = Date.now();
     const response = await chat.invoke([
       new SystemMessage(systemPrompt),
       ...state.messages,
     ]);
+    const outputChars =
+      typeof response.content === 'string'
+        ? response.content.length
+        : JSON.stringify(response.content).length;
+    hooks?.onAfterInvoke?.({
+      outputChars,
+      latencyMs: Date.now() - startedAt,
+    });
     return { messages: [response] };
   };
 

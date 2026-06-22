@@ -21,6 +21,7 @@ import {
 } from '../../core/llm/persona-prompt.template';
 import { ScoringService } from '../../core/llm/scoring.service';
 import { UsageService } from '../../core/llm/usage.service';
+import { LlmFlowLogger, previewText } from '../../core/llm/llm-flow.logger';
 import { SessionRegistry } from './session-registry';
 
 const END_SENTINEL = '[CONVERSATION_ENDED]';
@@ -38,6 +39,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     private readonly checkpointer: CheckpointerService,
     private readonly scoringService: ScoringService,
     private readonly usage: UsageService,
+    private readonly flowLog: LlmFlowLogger,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
   ) {}
 
@@ -87,6 +89,16 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     // master-template improvements reach every persona (cache is the fallback).
     const systemPrompt = this.resolveSystemPrompt(session.persona);
 
+    const sessionSpan = this.flowLog.start('roleplay_session', {
+      sessionUid,
+      sessionDbId: session.id,
+      userId,
+      personaId: session.persona.id,
+      personaName: session.persona.name,
+      conversationModelId: session.persona.conversationModelId,
+      systemPromptChars: systemPrompt.length,
+    });
+
     // Build the per-session roleplay graph: registry model (+ fallbacks) + system
     // prompt, durable state via the shared PostgresSaver (thread_id = session uid).
     let graph;
@@ -96,15 +108,36 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       const resolved = await this.models.resolve(session.persona.conversationModelId);
       resolvedModelId = resolved.id;
       resolvedModelName = resolved.name;
-      this.logger.debug(
-        `Resolved model "${resolved.name}" for session ${sessionUid} (persona ${session.persona.name})`,
-      );
       graph = buildRoleplayGraph(
         resolved.chat,
         systemPrompt,
         this.checkpointer.saver,
+        {
+          onBeforeInvoke: (ctx) => {
+            this.flowLog.step('roleplay_invoke', 'graph_node_enter', {
+              sessionUid,
+              threadId: sessionUid,
+              modelId: resolvedModelId,
+              modelName: resolvedModelName,
+              ...ctx,
+            });
+          },
+          onAfterInvoke: (ctx) => {
+            this.flowLog.step('roleplay_invoke', 'graph_node_exit', {
+              sessionUid,
+              modelId: resolvedModelId,
+              modelName: resolvedModelName,
+              ...ctx,
+            });
+          },
+        },
       );
+      sessionSpan.complete({
+        modelId: resolvedModelId,
+        modelName: resolvedModelName,
+      });
     } catch (err) {
+      sessionSpan.fail(err);
       this.logger.warn({ err }, `Model resolve failed for session ${sessionUid}`);
       this.close(
         client,
@@ -194,9 +227,15 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       return;
     }
 
-    this.logger.debug(
-      `Turn received (${content.length} chars) for session ${wsClient.sessionUid}`,
-    );
+    const turnSpan = this.flowLog.start('roleplay_turn', {
+      sessionUid: wsClient.sessionUid,
+      sessionDbId: wsClient.sessionDbId,
+      userId: wsClient.userId,
+      modelId: wsClient.modelId,
+      modelName: wsClient.modelName,
+      inputChars: content.length,
+      inputPreview: previewText(content),
+    });
 
     await this.prisma.chatMessage.create({
       data: { sessionId: wsClient.sessionDbId, role: 'user', content },
@@ -218,14 +257,21 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
     const startedAt = Date.now();
     let providerUsage: { inputTokens: number; outputTokens: number } | null = null;
+    let chunkCount = 0;
 
     try {
+      this.flowLog.step('roleplay_turn', 'graph_stream_start', {
+        sessionUid: wsClient.sessionUid,
+        threadId: wsClient.sessionUid,
+      });
+
       const stream = (await wsClient.graph.stream(
         { messages: [new HumanMessage(content)] },
         { configurable: { thread_id: wsClient.sessionUid }, streamMode: 'messages' },
       )) as AsyncIterable<[AIMessageChunk, unknown]>;
 
       for await (const [chunk] of stream) {
+        chunkCount++;
         // Providers emit usage_metadata once (usually on the final chunk).
         const u = this.usage.extractUsage(chunk);
         if (u) providerUsage = u;
@@ -242,6 +288,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
         }
       }
     } catch (err) {
+      turnSpan.fail(err, { chunkCount });
       this.logger.error({ err }, 'LLM stream error');
       this.sendError(client, 'PROVIDER_ERROR', 'LLM unavailable');
       return;
@@ -253,9 +300,16 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     }
     emit(buffer);
 
-    this.logger.debug(
-      `Turn streamed ${fullContent.length} chars for session ${wsClient.sessionUid}${ended ? ' (ended)' : ''}`,
-    );
+    turnSpan.complete({
+      outputChars: fullContent.length,
+      outputPreview: previewText(fullContent),
+      chunkCount,
+      conversationEnded: ended,
+      inputTokens: providerUsage?.inputTokens ?? this.usage.estimateTokens(content),
+      outputTokens: providerUsage?.outputTokens ?? this.usage.estimateTokens(fullContent),
+      usageEstimated: providerUsage === null,
+      latencyMs: Date.now() - startedAt,
+    });
 
     // Telemetry: real provider usage when available, else a char-based estimate
     // (this turn's input only; prior context isn't counted in the estimate).
@@ -283,7 +337,12 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     });
 
     // Persona signalled the roleplay is complete → run end-of-session scoring.
-    if (ended) await this.endSession(client);
+    if (ended) {
+      this.flowLog.step('roleplay_turn', 'conversation_ended_sentinel', {
+        sessionUid: wsClient.sessionUid,
+      });
+      await this.endSession(client);
+    }
   }
 
   private async handleControl(
@@ -301,6 +360,11 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
     this.send(client, { type: 'session_ending' });
 
+    this.flowLog.step('scoring', 'session_end_triggered', {
+      sessionUid: wsClient.sessionUid,
+      sessionDbId: wsClient.sessionDbId,
+    });
+
     await this.prisma.session.update({
       where: { uid: wsClient.sessionUid },
       data: { status: 'COMPLETED', endedAt: new Date() },
@@ -314,9 +378,6 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       const result = await this.scoringService.scoreSession(wsClient.sessionDbId);
       scores = result.scores;
       feedback = result.feedback;
-      this.logger.debug(
-        `Scored session ${wsClient.sessionUid}: ${result.scores.length} criteria`,
-      );
     } catch (err) {
       this.logger.error({ err }, `Scoring failed for session ${wsClient.sessionUid}`);
     }
