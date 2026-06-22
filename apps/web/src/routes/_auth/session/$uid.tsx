@@ -257,6 +257,8 @@ function ScoreReveal({
   scores: ScoreRow[]
   feedback: string | null
 }) {
+  console.log("scores ---------->",scores)
+  console.log("feedback ---------->",feedback)
   return (
     <div className="mt-3 rounded-xl border border-border bg-background p-4">
       <h2 className="text-sm font-semibold">Session feedback</h2>
