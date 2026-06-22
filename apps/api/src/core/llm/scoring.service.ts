@@ -7,6 +7,7 @@ import { UsageService } from './usage.service';
 
 export interface ScoreRow {
   criterionId: number;
+  name: string;
   score: number | null;
   maxScore: number;
   feedback: string | null;
@@ -85,6 +86,7 @@ Return one score object per rubric criterion (use the exact criterionId shown), 
       const match = llmResult?.scores.find((s) => s.criterionId === c.id);
       return {
         criterionId: c.id,
+        name: c.name,
         score: match?.score ?? null,
         maxScore: c.maxScore,
         feedback:
@@ -94,8 +96,9 @@ Return one score object per rubric criterion (use the exact criterionId shown), 
     });
 
     await this.prisma.$transaction([
+      // `name` is display-only — ScoreResult has no name column, so strip it here.
       this.prisma.scoreResult.createMany({
-        data: scoreRows.map((r) => ({ ...r, sessionId })),
+        data: scoreRows.map(({ name: _name, ...r }) => ({ ...r, sessionId })),
       }),
       this.prisma.session.update({
         where: { id: sessionId },

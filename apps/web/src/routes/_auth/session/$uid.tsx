@@ -24,6 +24,7 @@ export const Route = createFileRoute('/_auth/session/$uid')({
 
 interface ScoreRow {
   criterionId: number
+  name?: string
   score: number | null
   maxScore: number
   feedback: string | null
@@ -270,7 +271,7 @@ function ScoreReveal({
               className="flex items-center justify-between gap-3 text-sm"
             >
               <span className="text-muted-foreground">
-                Criterion #{s.criterionId}
+                {s.name ?? `Criterion #${s.criterionId}`}
               </span>
               <span className="font-data tabular-nums">
                 {s.score ?? '—'} / {s.maxScore}
