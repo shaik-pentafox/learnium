@@ -111,6 +111,11 @@ function PersonaCard({
           <div className="flex items-center gap-2">
             <span className="truncate font-medium">{persona.name}</span>
             <PublishBadge published={persona.isPublished} />
+            {persona.readonly && (
+              <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
+                Shared
+              </span>
+            )}
           </div>
           {persona.description && (
             <p className="mt-0.5 line-clamp-2 text-sm text-muted-foreground">
@@ -120,14 +125,16 @@ function PersonaCard({
         </div>
       </div>
       <div className="mt-auto flex items-center gap-2">
-        <Link
-          to="/personas/$id"
-          params={{ id: String(persona.id) }}
-          className={buttonVariants({ variant: 'secondary', size: 'sm' })}
-        >
-          <Pencil className="size-4" />
-          Edit
-        </Link>
+        {!persona.readonly && (
+          <Link
+            to="/personas/$id"
+            params={{ id: String(persona.id) }}
+            className={buttonVariants({ variant: 'secondary', size: 'sm' })}
+          >
+            <Pencil className="size-4" />
+            Edit
+          </Link>
+        )}
         <Button size="sm" onClick={onTest} disabled={testing}>
           <Rocket className="size-4" />
           {testing ? 'Starting…' : 'Test'}

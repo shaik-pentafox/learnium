@@ -45,6 +45,8 @@ export interface PersonaSummary {
   description?: string | null
   color?: string | null
   isPublished?: boolean
+  /** True when the viewer may test but not edit (e.g. trainer viewing a super-admin persona). */
+  readonly?: boolean
 }
 
 export interface Persona {

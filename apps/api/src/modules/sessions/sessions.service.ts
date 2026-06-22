@@ -35,9 +35,17 @@ export class SessionsService {
         throw new ForbiddenException('Persona not available');
       }
     } else {
-      // TRAINER / SUPER_ADMIN: test/simulation session against own (trainer) or any (admin) persona.
+      // TRAINER / SUPER_ADMIN: simulation session. Trainers may test their own
+      // personas plus published super-admin personas; admins may test any.
       if (actor.role === 'TRAINER' && persona.createdById !== actor.sub) {
-        throw new ForbiddenException('You can only test your own personas');
+        const superAdminIds = await superAdminUserIds(this.prisma);
+        const sharedAdminPersona =
+          persona.isPublished &&
+          persona.createdById != null &&
+          superAdminIds.includes(persona.createdById);
+        if (!sharedAdminPersona) {
+          throw new ForbiddenException('You can only test your own personas');
+        }
       }
       isSimulation = dto.simulation ?? true;
     }
