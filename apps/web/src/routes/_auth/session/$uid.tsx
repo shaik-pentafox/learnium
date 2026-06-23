@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { createFileRoute, Link } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
-import { SendHorizonal, Mic, FlaskConical, Info } from 'lucide-react'
+import { SendHorizonal, Mic, FlaskConical, Info, X } from 'lucide-react'
+import { Popover as PopoverPrimitive } from 'radix-ui'
 import { getSession, sessionKeys } from '@/services/sessions'
 import { useRoleplaySession } from '@/features/roleplay/use-roleplay-session'
 import type { ChannelStatus } from '@/lib/ws-client'
@@ -272,13 +273,10 @@ function ScoreReveal({
               key={s.criterionId}
               className="flex items-center justify-between gap-3 text-sm"
             >
-              <div>
-
-              <span className="text-muted-foreground">
+              <span className="flex items-center gap-1.5 text-muted-foreground">
                 {s.name ?? `Criterion #${s.criterionId}`}
+                <CriterionFeedback feedback={s.feedback} />
               </span>
-              <Info/>
-              </div>
               <span className="font-data tabular-nums">
                 {s.score ?? '—'} / {s.maxScore}
               </span>
@@ -294,5 +292,45 @@ function ScoreReveal({
         )
       )}
     </div>
+  )
+}
+
+/** Info icon that reveals a criterion's per-score feedback in a tap popover. */
+function CriterionFeedback({ feedback }: { feedback: string | null }) {
+  if (!feedback) return null
+  return (
+    <PopoverPrimitive.Root>
+      <PopoverPrimitive.Trigger asChild>
+        <button
+          type="button"
+          aria-label="Show feedback for this criterion"
+          className="text-muted-foreground/60 transition-colors hover:text-foreground focus-visible:text-foreground focus-visible:outline-none"
+        >
+          <Info className="size-3.5" />
+        </button>
+      </PopoverPrimitive.Trigger>
+      <PopoverPrimitive.Portal>
+        <PopoverPrimitive.Content
+          side="top"
+          align="start"
+          sideOffset={8}
+          collisionPadding={12}
+          className="z-50 w-72 max-w-[calc(100vw-1.5rem)] origin-(--radix-popover-content-transform-origin) animate-in rounded-lg border border-border bg-popover text-popover-foreground shadow-lg fade-in-0 zoom-in-95 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95"
+        >
+          <div className="flex flex-row-reverse gap-2 px-3 pt-2">
+            <PopoverPrimitive.Close
+              aria-label="Close"
+              className="-mr-1 -mt-0.5 rounded-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <X className="size-3.5" opacity={0.5} />
+            </PopoverPrimitive.Close>
+          </div>
+          <p className="px-3 py-2 text-xs text-muted-foreground">
+            {feedback}
+          </p>
+          <PopoverPrimitive.Arrow className="fill-border" />
+        </PopoverPrimitive.Content>
+      </PopoverPrimitive.Portal>
+    </PopoverPrimitive.Root>
   )
 }
