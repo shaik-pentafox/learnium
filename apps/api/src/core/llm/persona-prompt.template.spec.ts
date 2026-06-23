@@ -88,4 +88,22 @@ describe('renderSystemPrompt', () => {
     expect(prompt).toContain('spoken phone call');
     expect(prompt).not.toContain('live text chat');
   });
+
+  it('always instructs the customer to open on the BEGIN cue', () => {
+    const prompt = renderSystemPrompt(base);
+    expect(prompt).toContain('Opening the conversation');
+    expect(prompt).toContain('[BEGIN]');
+    expect(prompt).toContain('You start the conversation');
+  });
+
+  it('pins the opener when openingMessage is provided, omits it otherwise', () => {
+    expect(renderSystemPrompt(base)).not.toContain('opening message should be');
+    const pinned = renderSystemPrompt({
+      ...base,
+      openingMessage: 'Hi, I was charged twice and need a refund.',
+    });
+    expect(pinned).toContain(
+      'Your opening message should be essentially: "Hi, I was charged twice and need a refund."',
+    );
+  });
 });

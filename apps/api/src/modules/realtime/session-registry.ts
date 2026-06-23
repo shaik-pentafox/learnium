@@ -13,6 +13,7 @@ export interface WsClient {
   /** Resolved conversation model — carried for usage telemetry. */
   modelId?: number;
   modelName?: string;
+  providerType?: string;
 }
 
 @Injectable()

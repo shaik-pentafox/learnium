@@ -28,6 +28,8 @@ export interface PersonaTemplate {
   behaviorNotes?: string
   resolutionCriteria: string
   additionalInstructions?: string
+  /** Optional fixed opener; blank → the model improvises the customer's first line. */
+  openingMessage?: string
 }
 
 export interface ScoreCriterion {
@@ -122,6 +124,7 @@ const OPTIONAL_TEMPLATE_KEYS = [
   'hiddenDetails',
   'behaviorNotes',
   'additionalInstructions',
+  'openingMessage',
 ] as const
 
 /** Trim required fields; drop blank optional fields entirely. */

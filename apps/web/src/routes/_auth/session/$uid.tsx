@@ -1,8 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
-import { createFileRoute, Link } from '@tanstack/react-router'
+import {
+  createFileRoute,
+  Link,
+  useBlocker,
+  useNavigate,
+} from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
-import { SendHorizonal, Mic, FlaskConical, Info } from 'lucide-react'
+import { SendHorizonal, Mic, FlaskConical } from 'lucide-react'
 import { getSession, sessionKeys } from '@/services/sessions'
+import { abandonSession } from '@/services/roleplay'
 import { useRoleplaySession } from '@/features/roleplay/use-roleplay-session'
 import type { ChannelStatus } from '@/lib/ws-client'
 import type { ChatMessage } from '@/features/roleplay/use-roleplay-session'
@@ -12,6 +18,16 @@ import { useAuthStore } from '@/stores/auth'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Orb, type AgentState } from '@/components/chat/orb'
+import { MarkdownText } from '@/components/chat/markdown'
+import { useSidebar } from '@/components/ui/sidebar'
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogFooter,
+  DialogTitle,
+  DialogDescription,
+} from '@/components/ui/dialog'
 import {
   Conversation,
   ConversationContent,
@@ -40,8 +56,26 @@ function ChatSession() {
   })
   const isSimulation = detail.data?.isSimulation === true
   const session = useRoleplaySession(uid)
+  const navigate = useNavigate()
   const [draft, setDraft] = useState('')
+  const [startConfirmed, setStartConfirmed] = useState(false)
   const lastError = useRef<string | null>(null)
+  // Set just before an intentional leave so the nav blocker lets it through.
+  const leavingRef = useRef(false)
+
+  // Focus the chat: collapse an open sidebar on enter, restore it on leave
+  // (desktop only — mobile uses an offcanvas sheet that's already closed).
+  const { open: sidebarOpen, setOpen: setSidebarOpen, isMobile } = useSidebar()
+  const sidebarWasOpen = useRef(sidebarOpen)
+  useEffect(() => {
+    if (isMobile) return
+    setSidebarOpen(false)
+    return () => {
+      if (sidebarWasOpen.current) setSidebarOpen(true)
+    }
+    // Mount/unmount only: collapse on enter, restore prior state on leave.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   useEffect(() => {
     if (session.error && session.error !== lastError.current) {
@@ -49,6 +83,43 @@ function ChatSession() {
       notify.error(session.error)
     }
   }, [session.error])
+
+  // Block in-app navigation away from a live session (and arm the browser's
+  // native refresh/close prompt). Resolved via the leave-confirm dialog.
+  const blocker = useBlocker({
+    shouldBlockFn: () => !session.ended && !leavingRef.current,
+    enableBeforeUnload: () => !session.ended,
+    withResolver: true,
+  })
+
+  // Fresh session (server says no messages yet): confirm before the customer opens.
+  const showStartDialog =
+    session.hasStarted === false && !startConfirmed && !session.ended
+
+  function confirmStart() {
+    setStartConfirmed(true)
+    session.begin()
+  }
+
+  async function cancelStart() {
+    leavingRef.current = true
+    try {
+      await abandonSession(uid)
+    } catch {
+      // Best-effort: the idle reaper will sweep an unattended ACTIVE session.
+    }
+    void navigate({ to: backTo })
+  }
+
+  async function confirmLeave() {
+    leavingRef.current = true
+    try {
+      await abandonSession(uid)
+    } catch {
+      // Best-effort; reaper handles a stranded session.
+    }
+    blocker.proceed?.()
+  }
 
   function submit() {
     if (!draft.trim() || session.ended) return
@@ -68,6 +139,56 @@ function ChatSession() {
 
   return (
     <div className="mx-auto flex h-[calc(100svh-3.5rem-3rem)] max-w-3xl flex-col">
+      {/* Start-confirm: the customer opens the conversation only after the agent
+          is ready. Cancel abandons the session and goes back. */}
+      <Dialog open={showStartDialog}>
+        <DialogContent showCloseButton={false}>
+          <DialogHeader>
+            <DialogTitle>Start roleplay</DialogTitle>
+            <DialogDescription>
+              You are the support agent. {session.personaName ?? 'The customer'}{' '}
+              will open the conversation — read their first message, then reply in
+              character. Ready to begin?
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="ghost" onClick={cancelStart}>
+              Cancel
+            </Button>
+            <Button onClick={confirmStart} disabled={session.status !== 'open'}>
+              Start conversation
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Leave-confirm: navigating away mid-session abandons it (no score). */}
+      <Dialog
+        open={blocker.status === 'blocked'}
+        onOpenChange={(open) => {
+          if (!open) blocker.reset?.()
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Leave this session?</DialogTitle>
+            <DialogDescription>
+              Leaving now ends the roleplay without scoring — it won’t count as a
+              completed attempt. To get feedback, finish and use “End &amp; score”
+              instead.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => blocker.reset?.()}>
+              Keep practicing
+            </Button>
+            <Button variant="destructive" onClick={confirmLeave}>
+              Leave &amp; abandon
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* Persona header */}
       <header className="flex items-center justify-between gap-3 pb-3">
         <div className="flex items-center gap-3">
@@ -178,7 +299,7 @@ function EmptyState({ colors }: { colors: [string, string] }) {
     <div className="flex h-[40vh] flex-col items-center justify-center gap-4 text-center">
       <Orb colors={colors} agentState="listening" className="size-28" />
       <p className="text-sm text-muted-foreground">
-        Say something to begin the roleplay.
+        Waiting for the customer to start the conversation…
       </p>
     </div>
   )
@@ -190,13 +311,17 @@ function Bubble({ message }: { message: ChatMessage }) {
     <div className={cn('flex py-1.5', isUser ? 'justify-end' : 'justify-start')}>
       <div
         className={cn(
-          'max-w-[80%] whitespace-pre-wrap rounded-2xl px-4 py-2.5 text-sm',
+          'max-w-[80%] rounded-2xl px-4 py-2.5 text-sm',
           isUser
-            ? 'rounded-br-md bg-primary text-primary-foreground'
+            ? 'whitespace-pre-wrap rounded-br-md bg-primary text-primary-foreground'
             : 'rounded-bl-md bg-muted text-foreground',
         )}
       >
-        {message.content}
+        {isUser ? (
+          message.content
+        ) : (
+          <MarkdownText>{message.content}</MarkdownText>
+        )}
         {message.pending && <Caret />}
       </div>
     </div>
@@ -250,6 +375,20 @@ function ConnectionLabel({
   return <span className={cn('text-xs', tone)}>{STATUS_TEXT[status]}</span>
 }
 
+function overallPct(scores: ScoreRow[]): number | null {
+  const scored = scores.filter((s) => s.score !== null)
+  if (scored.length === 0) return null
+  const earned = scored.reduce((sum, s) => sum + (s.score ?? 0), 0)
+  const max = scored.reduce((sum, s) => sum + s.maxScore, 0)
+  return max > 0 ? Math.round((earned / max) * 100) : null
+}
+
+function scoreTone(pct: number): string {
+  if (pct >= 80) return 'text-success'
+  if (pct >= 60) return 'text-warning'
+  return 'text-destructive'
+}
+
 function ScoreReveal({
   scores,
   feedback,
@@ -257,42 +396,82 @@ function ScoreReveal({
   scores: ScoreRow[]
   feedback: string | null
 }) {
-  console.log("scores ---------->",scores)
-  console.log("feedback ---------->",feedback)
+  const pct = overallPct(scores)
   return (
-    <div className="mt-3 rounded-xl border border-border bg-background p-4">
-      <h2 className="text-sm font-semibold">Session feedback</h2>
-      {feedback && (
-        <p className="mt-1 text-sm text-muted-foreground">{feedback}</p>
-      )}
-      {scores.length > 0 ? (
-        <ul className="mt-3 space-y-2">
-          {scores.map((s) => (
-            <li
-              key={s.criterionId}
-              className="flex items-center justify-between gap-3 text-sm"
-            >
-              <div>
+    <div className="mt-3 overflow-hidden rounded-xl border border-border bg-surface">
+      <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
+        <h2 className="text-sm font-semibold">Session feedback</h2>
+        {pct !== null && (
+          <span
+            className={cn(
+              'font-data text-lg font-semibold tabular-nums',
+              scoreTone(pct),
+            )}
+          >
+            {pct}%
+          </span>
+        )}
+      </div>
 
-              <span className="text-muted-foreground">
-                {s.name ?? `Criterion #${s.criterionId}`}
-              </span>
-              <Info/>
-              </div>
-              <span className="font-data tabular-nums">
-                {s.score ?? '—'} / {s.maxScore}
-              </span>
-            </li>
-          ))}
-        </ul>
-      ) : (
-        !feedback && (
-          <p className="mt-1 text-sm text-muted-foreground">
-            No scores recorded. This persona has no scoring rubric, or no scoring
-            model is configured.
-          </p>
-        )
-      )}
+      <div className="space-y-4 p-4">
+        {feedback && (
+          <MarkdownText className="text-sm text-muted-foreground">
+            {feedback}
+          </MarkdownText>
+        )}
+
+        {scores.length > 0 ? (
+          <ul className="space-y-3">
+            {scores.map((s) => (
+              <CriterionRow key={s.criterionId} row={s} />
+            ))}
+          </ul>
+        ) : (
+          !feedback && (
+            <p className="text-sm text-muted-foreground">
+              No scores recorded. This persona has no scoring rubric, or no
+              scoring model is configured.
+            </p>
+          )
+        )}
+      </div>
     </div>
+  )
+}
+
+function CriterionRow({ row }: { row: ScoreRow }) {
+  const pct =
+    row.score !== null && row.maxScore > 0
+      ? Math.round((row.score / row.maxScore) * 100)
+      : null
+  return (
+    <li className="space-y-1.5">
+      <div className="flex items-center justify-between gap-3 text-sm">
+        <span className="min-w-0 truncate font-medium">
+          {row.name ?? `Criterion #${row.criterionId}`}
+        </span>
+        <span className="shrink-0 font-data tabular-nums text-muted-foreground">
+          {row.score ?? '—'} / {row.maxScore}
+        </span>
+      </div>
+      <div className="h-1.5 overflow-hidden rounded-full bg-muted">
+        <div
+          className={cn(
+            'h-full rounded-full transition-all',
+            pct === null
+              ? 'bg-muted'
+              : pct >= 80
+                ? 'bg-success'
+                : pct >= 60
+                  ? 'bg-warning'
+                  : 'bg-destructive',
+          )}
+          style={{ width: `${pct ?? 0}%` }}
+        />
+      </div>
+      {row.feedback && (
+        <p className="text-xs text-muted-foreground">{row.feedback}</p>
+      )}
+    </li>
   )
 }

@@ -49,4 +49,10 @@ export class SessionsController {
   async end(@Param('uid') uid: string, @CurrentUser() actor: JwtPayload) {
     return this.sessionsService.end(uid, actor.sub, actor.role);
   }
+
+  @Post(':uid/abandon')
+  @HttpCode(HttpStatus.OK)
+  async abandon(@Param('uid') uid: string, @CurrentUser() actor: JwtPayload) {
+    return this.sessionsService.abandon(uid, actor.sub, actor.role);
+  }
 }

@@ -189,16 +189,49 @@ export interface UsageRow {
   createdAt: string
 }
 
+export interface UsageSeriesPoint {
+  date: string
+  calls: number
+  totalTokens: number
+  costUsd: number
+}
+
+/** A named usage slice (by provider / kind), share of the totals. */
+export interface UsageBucket {
+  label: string
+  calls: number
+  totalTokens: number
+  costUsd: number
+}
+
+/** One day of usage for a single model/provider (flat; pivoted client-side). */
+export interface UsageKeySeriesPoint {
+  date: string
+  key: string
+  calls: number
+  totalTokens: number
+  costUsd: number
+}
+
 export interface UsageSummary {
   since: string
+  until?: string
   totals: UsageTotals
   byModel: UsageByModel[]
+  byProvider: UsageBucket[]
+  byKind: UsageBucket[]
+  series: UsageSeriesPoint[]
+  seriesByModel: UsageKeySeriesPoint[]
+  seriesByProvider: UsageKeySeriesPoint[]
   recent: UsageRow[]
 }
 
 export interface UsageParams {
   days?: number
   limit?: number
+  /** ISO date (YYYY-MM-DD). Explicit range wins over `days`. */
+  from?: string
+  to?: string
 }
 
 /** GET /llm/usage — token/cost totals, per-model breakdown, recent calls. */

@@ -23,3 +23,8 @@ export async function getRealtimeTicket(): Promise<string> {
   const { ticket } = await apiPost<{ ticket: string }>('/auth/realtime/ticket')
   return ticket
 }
+
+/** POST /sessions/:uid/abandon → mark a left-early session ABANDONED (no score). */
+export async function abandonSession(uid: string): Promise<void> {
+  await apiPost(`/sessions/${uid}/abandon`)
+}

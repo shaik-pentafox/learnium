@@ -32,10 +32,17 @@ export class LlmOpsController {
 
   @Get('usage')
   @Permissions('llmops:read')
-  usageSummary(@Query('days') days?: string, @Query('limit') limit?: string) {
+  usageSummary(
+    @Query('days') days?: string,
+    @Query('limit') limit?: string,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+  ) {
     return this.usage.summary({
       ...(days ? { days: Number(days) } : {}),
       ...(limit ? { limit: Number(limit) } : {}),
+      ...(from ? { from } : {}),
+      ...(to ? { to } : {}),
     });
   }
 

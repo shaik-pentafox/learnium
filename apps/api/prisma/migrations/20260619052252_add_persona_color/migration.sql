@@ -1,8 +1,8 @@
 -- AlterTable
-ALTER TABLE "personas" ADD COLUMN     "color" TEXT;
+ALTER TABLE "personas" ADD COLUMN IF NOT EXISTS "color" TEXT;
 
 -- CreateTable
-CREATE TABLE "llm_usage" (
+CREATE TABLE IF NOT EXISTS "llm_usage" (
     "id" SERIAL NOT NULL,
     "kind" TEXT NOT NULL,
     "modelId" INTEGER,
@@ -22,7 +22,7 @@ CREATE TABLE "llm_usage" (
 );
 
 -- CreateIndex
-CREATE INDEX "llm_usage_createdAt_idx" ON "llm_usage"("createdAt");
+CREATE INDEX IF NOT EXISTS "llm_usage_createdAt_idx" ON "llm_usage"("createdAt");
 
 -- CreateIndex
-CREATE INDEX "llm_usage_modelId_idx" ON "llm_usage"("modelId");
+CREATE INDEX IF NOT EXISTS "llm_usage_modelId_idx" ON "llm_usage"("modelId");

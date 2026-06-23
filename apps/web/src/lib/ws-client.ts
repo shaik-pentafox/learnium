@@ -12,6 +12,9 @@ const RoleplayServerSchema = z.discriminatedUnion('type', [
     personaName: z.string(),
     personaColor: z.string().nullable().optional(),
     systemPrompt: z.string(),
+    // True when the session already has messages (reconnect) — suppresses the
+    // start-confirm dialog and the opener so neither fires twice.
+    hasStarted: z.boolean().optional(),
   }),
   z.object({ type: z.literal('token'), delta: z.string() }),
   z.object({

@@ -35,6 +35,8 @@ import {
   type PersonaTemplate,
   type ScoreCriterionInput,
 } from '@/services/personas'
+import { NumberField } from '../ui/number-field'
+import { Slider } from '@/components/ui/slider'
 
 const EMOTION_LABELS: Record<(typeof EMOTIONS)[number], string> = {
   calm: 'Calm',
@@ -64,6 +66,7 @@ function emptyTemplate(): PersonaTemplate {
     behaviorNotes: '',
     resolutionCriteria: '',
     additionalInstructions: '',
+    openingMessage: '',
   }
 }
 
@@ -326,17 +329,23 @@ export function PersonaBuilder({ persona }: { persona?: Persona }) {
               </Select>
             </Field>
           </div>
-          <Field label={`Intensity — ${template.intensity}/5`} hint="How strong the emotion is.">
-            <input
-              type="range"
-              min={1}
-              max={5}
-              step={1}
-              value={template.intensity}
-              onChange={(e) => setField('intensity', Number(e.target.value))}
-              className="w-full accent-primary"
-              aria-label="Intensity"
-            />
+          <Field label="Intensity" hint="How strong the emotion is.">
+            <div className="flex items-center gap-4">
+              <Slider
+                className="flex-1"
+                value={[template.intensity]}
+                onValueChange={(v) =>
+                  setField('intensity', v[0] ?? template.intensity)
+                }
+                min={1}
+                max={5}
+                step={1}
+                aria-label="Intensity"
+              />
+              <span className="w-8 text-right text-sm font-medium tabular-nums">
+                {template.intensity}/5
+              </span>
+            </div>
           </Field>
         </Section>
 
@@ -390,6 +399,17 @@ export function PersonaBuilder({ persona }: { persona?: Persona }) {
               placeholder="You are short on time and say so early."
             />
           </Field>
+          <Field
+            label="Opening message"
+            hint="Leave blank to let the model improvise the customer's first line each session."
+          >
+            <Textarea
+              value={template.openingMessage ?? ''}
+              onChange={(e) => setField('openingMessage', e.target.value)}
+              rows={2}
+              placeholder="Hi, I was charged twice this month and I want it refunded."
+            />
+          </Field>
         </Section>
 
         <Section
@@ -415,12 +435,11 @@ export function PersonaBuilder({ persona }: { persona?: Persona }) {
                   placeholder="Criterion (e.g., De-escalation)"
                   className="flex-1"
                 />
-                <Input
-                  type="number"
+                <NumberField
                   min={1}
                   max={100}
-                  value={row.maxScore}
-                  onChange={(e) => setRow(row.key, { maxScore: Number(e.target.value) || 1 })}
+                  value={String(row.maxScore)}
+                  onChange={(v) => setRow(row.key, { maxScore: Number(v) || 1 })}
                   className="w-20"
                   aria-label="Max score"
                 />
@@ -463,13 +482,13 @@ export function PersonaBuilder({ persona }: { persona?: Persona }) {
             </Section>
           )}
 
-          {/* {isEdit && persona?.systemPrompt && (
+          {isEdit && persona?.systemPrompt && (
             <Section title="Rendered prompt" hint="Read-only preview of the generated system prompt.">
               <pre className="max-h-72 overflow-auto whitespace-pre-wrap rounded-md bg-muted p-3 font-data text-xs text-muted-foreground">
                 {persona.systemPrompt}
               </pre>
             </Section>
-          )} */}
+          )}
 
           <div className="space-y-2">
             {isEdit ? (
@@ -604,10 +623,10 @@ function Field({
   children: React.ReactNode
 }) {
   return (
-    <label className="block space-y-2 text-sm">
-      <span className="font-medium">{label}</span>
+    <label className="block text-sm">
+      <span className="mb-2 block font-medium">{label}</span>
       {children}
-      {hint && <span className="block text-xs text-muted-foreground">{hint}</span>}
+      {hint && <span className="mt-1.5 block text-xs text-muted-foreground">{hint}</span>}
     </label>
   )
 }

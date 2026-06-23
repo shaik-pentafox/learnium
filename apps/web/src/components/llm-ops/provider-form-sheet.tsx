@@ -244,10 +244,10 @@ interface FieldProps {
 
 function Field({ label, hint, children }: FieldProps) {
   return (
-    <label className="block space-y-2 text-sm">
-      <span className="font-medium">{label}</span>
+    <label className="block text-sm">
+      <span className="mb-2 block font-medium">{label}</span>
       {children}
-      {hint && <span className="block text-xs text-muted-foreground">{hint}</span>}
+      {hint && <span className="mt-1.5 block text-xs text-muted-foreground">{hint}</span>}
     </label>
   )
 }

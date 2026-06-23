@@ -25,7 +25,7 @@ async function open() {
 }
 
 describe('useRoleplaySession', () => {
-  it('captures the persona name from the joined frame', async () => {
+  it('captures the persona name and start state from the joined frame', async () => {
     const { result } = await open()
     act(() =>
       FakeWebSocket.last.emitMessage({
@@ -33,11 +33,37 @@ describe('useRoleplaySession', () => {
         sessionId: 'sess-1',
         personaName: 'Angry Customer',
         systemPrompt: 'x',
+        hasStarted: false,
       }),
     )
     await waitFor(() =>
       expect(result.current.personaName).toBe('Angry Customer'),
     )
+    expect(result.current.hasStarted).toBe(false)
+  })
+
+  it('begin() asks the customer to open the conversation', async () => {
+    const { result } = await open()
+    act(() => result.current.begin())
+    expect(JSON.parse(FakeWebSocket.last.sent.at(-1)!)).toMatchObject({
+      type: 'control',
+      action: 'begin',
+    })
+    expect(result.current.thinking).toBe(true)
+  })
+
+  it('marks hasStarted true when joining a session already in progress', async () => {
+    const { result } = await open()
+    act(() =>
+      FakeWebSocket.last.emitMessage({
+        type: 'joined',
+        sessionId: 'sess-1',
+        personaName: 'Angry Customer',
+        systemPrompt: 'x',
+        hasStarted: true,
+      }),
+    )
+    await waitFor(() => expect(result.current.hasStarted).toBe(true))
   })
 
   it('appends a user message and streams the assistant reply', async () => {

@@ -23,8 +23,8 @@ function AuthLayout() {
   return (
     <SidebarProvider>
       <AppSidebar />
-      <SidebarInset className="h-svh overflow-hidden">
-        <header className="sticky top-0 z-10 flex h-14 shrink-0 items-center gap-2 border-b border-border bg-background px-4">
+      <SidebarInset className="h-svh overflow-hidden bg-sidebar">
+        <header className="sticky top-0 z-10 flex h-14 shrink-0 items-center gap-2 bg-sidebar px-4 text-sidebar-foreground">
           <SidebarTrigger className="-ml-1" />
           <Separator
             orientation="vertical"
@@ -39,7 +39,7 @@ function AuthLayout() {
             <NavUser />
           </div>
         </header>
-        <main className="flex-1 overflow-auto py-6 px-8">
+        <main className="flex-1 overflow-auto rounded-tl-2xl bg-background py-6 px-8">
           <Outlet />
         </main>
       </SidebarInset>

@@ -1,3 +1,4 @@
+import { useMemo } from 'react'
 import { Link } from '@tanstack/react-router'
 import {
   LayoutDashboard,
@@ -34,7 +35,7 @@ const ALL: UserRole[] = ['SUPER_ADMIN', 'TRAINER', 'USER']
 
 // Most targets land in F1+; Dashboard, Practice and LLM Ops route today.
 const NAV: NavItem[] = [
-  { label: 'Dashboard', to: '/dashboard', icon: LayoutDashboard, roles: ALL },
+  { label: 'Home', to: '/dashboard', icon: LayoutDashboard, roles: ALL },
   { label: 'Arena', to: '/arena', icon: MessagesSquare, roles: ['USER'] },
   {
     label: 'Personas',
@@ -49,7 +50,7 @@ const NAV: NavItem[] = [
     roles: ['SUPER_ADMIN', 'TRAINER'],
   },
   {
-    label: 'Analytics',
+    label: 'Report',
     to: '/dashboard',
     icon: BarChart3,
     roles: ['SUPER_ADMIN', 'TRAINER'],
@@ -84,17 +85,20 @@ function NavLink({ item }: { item: NavItem }) {
 
 export function AppSidebar() {
   const role = useAuthStore((s) => s.user?.role ?? 'USER')
-  const items = NAV.filter((item) => item.roles.includes(role))
+  const items = useMemo(
+    () => NAV.filter((item) => item.roles.includes(role)),
+    [role],
+  )
 
   return (
-    <Sidebar collapsible="icon">
-      <SidebarHeader>
+    <Sidebar collapsible="icon" className="border-r-0!">
+      <SidebarHeader className="group-data-[collapsible=icon]:py-3">
         <SidebarMenu>
           <SidebarMenuItem>
             <SidebarMenuButton
               asChild
               size="lg"
-              className="data-[slot=sidebar-menu-button]:!p-1.5"
+              className="!bg-transparent active:!bg-transparent data-[slot=sidebar-menu-button]:!p-1.5"
             >
               <Link
                 to="/dashboard"

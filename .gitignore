@@ -11,10 +11,12 @@ reference_app/
 *.tsbuildinfo
 CLAUDE.md
 .claude
+.agents
 plans/
 scripts/
 package-lock.json
 yarn.lock
+skills-lock.json
 
 # Logs
 logs

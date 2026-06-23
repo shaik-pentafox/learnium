@@ -1,4 +1,5 @@
 import { apiPost } from '@/lib/api-client'
+import { queryClient } from '@/lib/query-client'
 import { useAuthStore, type Tokens } from '@/stores/auth'
 
 interface LoginPayload {
@@ -11,6 +12,8 @@ interface LoginPayload {
  *  name from the entered username. */
 export async function login(payload: LoginPayload): Promise<void> {
   const tokens = await apiPost<Tokens>('/auth/login', payload)
+  // Drop any prior account's cached responses before the new session begins.
+  queryClient.clear()
   useAuthStore.getState().setSession(tokens, payload.username)
 }
 
@@ -23,6 +26,7 @@ export async function logout(): Promise<void> {
     // ignore — local clear below is authoritative for the client
   }
   useAuthStore.getState().clear()
+  queryClient.clear()
 }
 
 /** On app load, exchange a persisted refresh token for a fresh access token so

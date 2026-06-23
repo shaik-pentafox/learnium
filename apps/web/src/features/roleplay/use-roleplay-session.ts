@@ -22,11 +22,16 @@ export interface RoleplaySession {
   messages: ChatMessage[]
   /** True while the assistant is streaming a reply. */
   thinking: boolean
+  /** Server truth from `joined`: null before join, then whether the session
+   *  already has messages. Drives the one-time start-confirm dialog. */
+  hasStarted: boolean | null
   ended: boolean
   scores: unknown[] | null
   feedback: string | null
   error: string | null
   sendMessage: (content: string) => void
+  /** Ask the customer (persona) to open the conversation. */
+  begin: () => void
   endSession: () => void
 }
 
@@ -40,6 +45,7 @@ export function useRoleplaySession(sessionUid: string): RoleplaySession {
   const [personaColor, setPersonaColor] = useState<string | null>(null)
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [thinking, setThinking] = useState(false)
+  const [hasStarted, setHasStarted] = useState<boolean | null>(null)
   const [ended, setEnded] = useState(false)
   const [scores, setScores] = useState<unknown[] | null>(null)
   const [feedback, setFeedback] = useState<string | null>(null)
@@ -54,6 +60,7 @@ export function useRoleplaySession(sessionUid: string): RoleplaySession {
       case 'joined':
         setPersonaName(msg.personaName)
         setPersonaColor(msg.personaColor ?? null)
+        setHasStarted(msg.hasStarted ?? false)
         break
       case 'token': {
         const delta = msg.delta
@@ -135,6 +142,11 @@ export function useRoleplaySession(sessionUid: string): RoleplaySession {
     channelRef.current?.send({ type: 'message', content: trimmed, id: uid() })
   }, [])
 
+  const begin = useCallback(() => {
+    setThinking(true)
+    channelRef.current?.send({ type: 'control', action: 'begin' })
+  }, [])
+
   const endSession = useCallback(() => {
     channelRef.current?.send({ type: 'control', action: 'end' })
   }, [])
@@ -145,11 +157,13 @@ export function useRoleplaySession(sessionUid: string): RoleplaySession {
     personaColor,
     messages,
     thinking,
+    hasStarted,
     ended,
     scores,
     feedback,
     error,
     sendMessage,
+    begin,
     endSession,
   }
 }

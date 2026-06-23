@@ -7,6 +7,7 @@ import { login } from '@/services/auth'
 import { useAuthStore } from '@/stores/auth'
 import { notify } from '@/lib/toast'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { PasswordInput } from '@/components/ui/password-input'
 import { Logo } from '@/components/logo'
 import { ShaderBackground } from '@/components/shader-background'
@@ -53,9 +54,11 @@ function LoginPage() {
     <div className="relative grid min-h-svh place-items-center overflow-hidden px-4">
       <ShaderBackground />
       <div className="relative z-10 w-full max-w-sm rounded-lg border border-border bg-surface/95 p-8 shadow-lg backdrop-blur-sm">
-        <div className="mb-6 space-y-1">
-          <Logo className="mb-4 size-9" />
-          <h1 className="font-brand text-3xl">Learnium</h1>
+        <div className="mb-6 space-y-3">
+          <div className="flex items-center gap-2.5">
+            <Logo className="size-9 shrink-0" />
+            <h1 className="font-brand text-3xl">Learnium</h1>
+          </div>
           <p className="text-sm text-muted-foreground">
             Sign in to your training workspace.
           </p>
@@ -63,10 +66,10 @@ function LoginPage() {
 
         <form onSubmit={handleSubmit(onSubmit)} className="space-y-4" noValidate>
           <Field label="Username" error={errors.username?.message}>
-            <input
+            <Input
               type="text"
               autoComplete="username"
-              className="h-11 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-ring"
+              className="h-11"
               placeholder="your.username"
               {...register('username')}
             />
@@ -108,10 +111,10 @@ interface FieldProps {
 
 function Field({ label, error, children }: FieldProps) {
   return (
-    <div className="space-y-2">
-      <label className="text-sm font-medium">{label}</label>
+    <div>
+      <label className="mb-2 block text-sm font-medium">{label}</label>
       {children}
-      {error && <p className="text-xs text-destructive">{error}</p>}
+      {error && <p className="mt-1.5 text-xs text-destructive">{error}</p>}
     </div>
   )
 }

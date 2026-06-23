@@ -148,4 +148,20 @@ export class SessionsService {
 
     return { uid, status: 'COMPLETED', scoringQueued: true };
   }
+
+  /** Trainee left mid-conversation: mark ABANDONED, no scoring. An interrupted
+   *  run is not a graded attempt. No-op if the session already ended. */
+  async abandon(uid: string, actorId: number, role: string) {
+    const session = await this.prisma.session.findUnique({ where: { uid } });
+    if (!session) throw new NotFoundException('Session', uid);
+    if (role === 'USER' && session.userId !== actorId) throw new ForbiddenException();
+    if (session.status !== 'ACTIVE') return { uid, status: session.status, message: 'Already ended' };
+
+    await this.prisma.session.update({
+      where: { uid },
+      data: { status: 'ABANDONED', endedAt: new Date() },
+    });
+
+    return { uid, status: 'ABANDONED' };
+  }
 }

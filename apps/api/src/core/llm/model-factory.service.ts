@@ -40,6 +40,8 @@ export type ChatRunnable = Runnable<BaseLanguageModelInput, AIMessageChunk>;
 export interface ResolvedModel {
   id: number;
   name: string;
+  /** Provider type (e.g. "gemini", "openai") — recorded with usage telemetry. */
+  providerType: string;
   /** Raw primary model — use for `.withStructuredOutput()`. */
   model: BaseChatModel;
   /** Primary + ordered fallbacks — use for streaming chat. */
@@ -93,7 +95,13 @@ export class ModelFactoryService {
         fallbackCount: fallbacks.length,
         cacheHit,
       });
-      return { id: record.id, name: record.name, model, chat };
+      return {
+        id: record.id,
+        name: record.name,
+        providerType: record.provider.type,
+        model,
+        chat,
+      };
     } catch (err) {
       span.fail(err);
       throw err;

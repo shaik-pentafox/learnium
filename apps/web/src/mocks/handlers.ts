@@ -41,6 +41,18 @@ function tokens() {
   }
 }
 
+/** Best-effort role from the bearer token payload (mock JWTs are unsigned). */
+function roleFromRequest(request: Request): string {
+  const auth = request.headers.get('Authorization') ?? ''
+  const token = auth.replace(/^Bearer\s+/i, '')
+  try {
+    const payload = JSON.parse(atob(token.split('.')[1] ?? '')) as { role?: string }
+    return payload.role ?? 'SUPER_ADMIN'
+  } catch {
+    return 'SUPER_ADMIN'
+  }
+}
+
 // In-memory provider registry so create/edit reflect in the UI during dev.
 interface MockProvider {
   id: number
@@ -309,6 +321,85 @@ export const handlers = [
     )
   }),
 
+  http.post(`${BASE}/sessions/:uid/abandon`, ({ request, params }) => {
+    if (!request.headers.get('Authorization')) {
+      return fail('UNAUTHORIZED', 'Missing credentials', 401)
+    }
+    return ok({ uid: params.uid, status: 'ABANDONED' })
+  }),
+
+  http.get(`${BASE}/dashboard/summary`, ({ request }) => {
+    if (!request.headers.get('Authorization')) {
+      return fail('UNAUTHORIZED', 'Missing credentials', 401)
+    }
+    const role = roleFromRequest(request)
+    if (role === 'TRAINER') {
+      const now = Date.now()
+      return ok({
+        firstName: 'Theo',
+        role: 'TRAINER',
+        totals: { trainees: 3, sessions: 24, completed: 19, abandoned: 3, avgScorePct: 72 },
+        trainees: [
+          { id: 4, name: 'Mark Smith', sessions: 7, completed: 5, avgScorePct: 54, lastActiveAt: new Date(now - 12 * 86_400_000).toISOString() },
+          { id: 5, name: 'Rosa Lee', sessions: 8, completed: 6, avgScorePct: 68, lastActiveAt: new Date(now - 2 * 86_400_000).toISOString() },
+          { id: 3, name: 'Jane Doe', sessions: 9, completed: 8, avgScorePct: 81, lastActiveAt: new Date(now - 1 * 86_400_000).toISOString() },
+        ],
+        byPersona: [
+          { personaName: 'Double-charged Dana', sessions: 11, avgScorePct: 58 },
+          { personaName: 'Angry Alex', sessions: 8, avgScorePct: 74 },
+          { personaName: 'Confused Carol', sessions: 5, avgScorePct: 83 },
+        ],
+        recent: [
+          { uid: 'r1', traineeName: 'Jane Doe', personaName: 'Angry Alex', status: 'COMPLETED', scorePct: 81 },
+          { uid: 'r2', traineeName: 'Mark Smith', personaName: 'Double-charged Dana', status: 'ABANDONED', scorePct: null },
+          { uid: 'r3', traineeName: 'Rosa Lee', personaName: 'Confused Carol', status: 'COMPLETED', scorePct: 88 },
+        ],
+        series: Array.from({ length: 90 }, (_, i) => ({
+          date: new Date(now - (89 - i) * 86_400_000).toISOString().slice(0, 10),
+          sessions: Math.max(0, Math.round(2 + 2 * Math.sin(i / 3))),
+          avgScorePct: 60 + Math.round(15 * Math.sin(i / 5)),
+        })),
+        personas: { total: 5, published: 3 },
+      })
+    }
+    if (role === 'USER') {
+      const now = Date.now()
+      return ok({
+        firstName: 'Jane',
+        role: 'USER',
+        totals: { sessions: 6, completed: 5, abandoned: 1, avgScorePct: 78, bestScorePct: 92 },
+        byPersona: [
+          { personaName: 'Double-charged Dana', sessions: 3, avgScorePct: 82 },
+          { personaName: 'Angry Alex', sessions: 2, avgScorePct: 64 },
+          { personaName: 'Confused Carol', sessions: 1, avgScorePct: null },
+        ],
+        series: Array.from({ length: 90 }, (_, i) => ({
+          date: new Date(now - (89 - i) * 86_400_000).toISOString().slice(0, 10),
+          sessions: Math.max(0, Math.round(1 + 1.5 * Math.sin(i / 4))),
+          avgScorePct: 70 + Math.round(12 * Math.sin(i / 6)),
+        })),
+        recent: [
+          { uid: 's-1', personaName: 'Double-charged Dana', status: 'COMPLETED', scorePct: 82 },
+          { uid: 's-2', personaName: 'Angry Alex', status: 'COMPLETED', scorePct: 64 },
+          { uid: 's-3', personaName: 'Confused Carol', status: 'ABANDONED', scorePct: null },
+        ],
+      })
+    }
+    return ok({
+      firstName: 'Ada',
+      role: 'SUPER_ADMIN',
+      totals: {
+        users: 12,
+        trainers: 3,
+        trainees: 8,
+        personas: 9,
+        publishedPersonas: 6,
+        sessions: 140,
+        completed: 118,
+      },
+    })
+  }),
+
   http.get(`${BASE}/llm/providers`, ({ request }) => {
     if (!request.headers.get('Authorization')) {
       return fail('UNAUTHORIZED', 'Missing credentials', 401)
@@ -427,13 +518,41 @@ export const handlers = [
       return fail('UNAUTHORIZED', 'Missing credentials', 401)
     }
     const now = Date.now()
+    const dayPoint = (i: number, tokens: number) => ({
+      date: new Date(now - (29 - i) * 86_400_000).toISOString().slice(0, 10),
+      calls: 3 + (i % 5),
+      totalTokens: tokens,
+      costUsd: Number((tokens * 0.000002).toFixed(4)),
+    })
+    const series = Array.from({ length: 30 }, (_, i) =>
+      dayPoint(i, 8000 + Math.round(6000 * Math.sin(i / 3) + i * 220)),
+    )
+    const splitSeries = (keys: [string, string]) =>
+      Array.from({ length: 30 }, (_, i) => i).flatMap((i) => [
+        { key: keys[0], ...dayPoint(i, 5000 + Math.round(4000 * Math.sin(i / 3))) },
+        { key: keys[1], ...dayPoint(i, 3000 + Math.round(2000 * Math.cos(i / 4))) },
+      ])
+    const seriesByModel = splitSeries(['gpt-4o', 'gemini-1.5-pro'])
+    const seriesByProvider = splitSeries(['openai', 'gemini'])
     return ok({
       since: new Date(now - 30 * 86_400_000).toISOString(),
+      until: new Date(now).toISOString(),
       totals: { calls: 128, totalTokens: 412_345, costUsd: 3.87 },
       byModel: [
         { modelName: 'gpt-4o', calls: 90, totalTokens: 320_000, costUsd: 3.2 },
         { modelName: 'gemini-1.5-pro', calls: 38, totalTokens: 92_345, costUsd: 0.67 },
       ],
+      byProvider: [
+        { label: 'openai', calls: 90, totalTokens: 320_000, costUsd: 3.2 },
+        { label: 'gemini', calls: 38, totalTokens: 92_345, costUsd: 0.67 },
+      ],
+      byKind: [
+        { label: 'chat', calls: 108, totalTokens: 360_000, costUsd: 3.4 },
+        { label: 'scoring', calls: 20, totalTokens: 52_345, costUsd: 0.47 },
+      ],
+      series,
+      seriesByModel,
+      seriesByProvider,
       recent: [
         { id: 1, kind: 'chat', modelName: 'gpt-4o', sessionId: 1, userId: 1, inputTokens: 1200, outputTokens: 340, totalTokens: 1540, costUsd: 0.0111, estimated: false, latencyMs: 1820, createdAt: new Date(now - 5 * 60_000).toISOString() },
         { id: 2, kind: 'scoring', modelName: 'gpt-4o', sessionId: 1, userId: 1, inputTokens: 2100, outputTokens: 180, totalTokens: 2280, costUsd: 0.0132, estimated: true, latencyMs: 2600, createdAt: new Date(now - 60 * 60_000).toISOString() },

@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../database/prisma.service';
 
 export type UsageKind = 'chat' | 'scoring';
@@ -23,6 +24,16 @@ export interface RecordUsageInput {
 
 // Rough fallback when the provider returns no usage_metadata (~4 chars/token).
 const CHARS_PER_TOKEN = 4;
+
+const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
+
+/** A bare YYYY-MM-DD means "through the end of that day" (inclusive), not its
+ *  midnight start. Full ISO timestamps are used verbatim. */
+function endOfDayIfDateOnly(value: string): Date {
+  return DATE_ONLY.test(value)
+    ? new Date(`${value}T23:59:59.999Z`)
+    : new Date(value);
+}
 
 @Injectable()
 export class UsageService {
@@ -95,46 +106,154 @@ export class UsageService {
   }
 
   /** Aggregate totals + per-model breakdown + recent rows over the last N days. */
-  async summary(query: { days?: number; limit?: number }) {
-    const days = query.days ?? 30;
+  async summary(query: {
+    days?: number;
+    limit?: number;
+    from?: string;
+    to?: string;
+  }) {
     const limit = query.limit ?? 50;
-    const since = new Date(Date.now() - days * 86_400_000);
-    const where = { createdAt: { gte: since } };
+    // Explicit from/to wins (date-range picker); otherwise a rolling window.
+    // A date-only `to` (YYYY-MM-DD) parses to midnight, which would drop the
+    // whole of that day — extend it to the end of the day so today's usage is
+    // included (matches the inclusive range the picker implies).
+    const until = query.to ? endOfDayIfDateOnly(query.to) : new Date();
+    const since = query.from
+      ? new Date(query.from)
+      : new Date(until.getTime() - (query.days ?? 30) * 86_400_000);
+    const where = { createdAt: { gte: since, lte: until } };
 
-    const [agg, byModel, recent] = await Promise.all([
-      this.prisma.llmUsage.aggregate({
-        where,
-        _sum: { totalTokens: true, costUsd: true },
-        _count: true,
-      }),
-      this.prisma.llmUsage.groupBy({
-        by: ['modelName'],
-        where,
-        _sum: { totalTokens: true, costUsd: true },
-        _count: true,
-        orderBy: { _sum: { costUsd: 'desc' } },
-      }),
-      this.prisma.llmUsage.findMany({
-        where,
-        orderBy: { createdAt: 'desc' },
-        take: limit,
-      }),
-    ]);
+    const groupArgs = {
+      where,
+      _sum: { totalTokens: true, costUsd: true },
+      _count: true,
+      orderBy: { _sum: { costUsd: 'desc' } },
+    } as const;
+
+    const [agg, byModel, byProvider, byKind, recent, series, seriesByModel, seriesByProvider] =
+      await Promise.all([
+        this.prisma.llmUsage.aggregate({
+          where,
+          _sum: { totalTokens: true, costUsd: true },
+          _count: true,
+        }),
+        this.prisma.llmUsage.groupBy({ by: ['modelName'], ...groupArgs }),
+        this.prisma.llmUsage.groupBy({ by: ['providerType'], ...groupArgs }),
+        this.prisma.llmUsage.groupBy({ by: ['kind'], ...groupArgs }),
+        this.prisma.llmUsage.findMany({
+          where,
+          orderBy: { createdAt: 'desc' },
+          take: limit,
+        }),
+        this.dailySeries(since, until),
+        this.dailyByKey(since, until, 'modelName'),
+        this.dailyByKey(since, until, 'providerType'),
+      ]);
+
+    const bucket = (label: string, r: { _count: number; _sum: { totalTokens: number | null; costUsd: number | null } }) => ({
+      label,
+      calls: r._count,
+      totalTokens: r._sum.totalTokens ?? 0,
+      costUsd: Number((r._sum.costUsd ?? 0).toFixed(4)),
+    });
 
     return {
       since: since.toISOString(),
+      until: until.toISOString(),
       totals: {
         calls: agg._count,
         totalTokens: agg._sum.totalTokens ?? 0,
         costUsd: Number((agg._sum.costUsd ?? 0).toFixed(4)),
       },
-      byModel: byModel.map((r) => ({
-        modelName: r.modelName,
-        calls: r._count,
-        totalTokens: r._sum.totalTokens ?? 0,
-        costUsd: Number((r._sum.costUsd ?? 0).toFixed(4)),
-      })),
+      byModel: byModel.map((r) => ({ ...bucket(r.modelName, r), modelName: r.modelName })),
+      byProvider: byProvider.map((r) => bucket(r.providerType ?? 'unknown', r)),
+      byKind: byKind.map((r) => bucket(r.kind, r)),
+      series,
+      seriesByModel,
+      seriesByProvider,
       recent,
     };
+  }
+
+  /** Daily totals split by a dimension column (modelName / providerType). Flat
+   *  rows {date, key, …}; the client pivots to one area per key. Not gap-filled
+   *  per key (the client fills against the overall day range). */
+  private async dailyByKey(
+    since: Date,
+    until: Date,
+    column: 'modelName' | 'providerType',
+  ) {
+    const col = Prisma.raw(`"${column}"`);
+    const rows = await this.prisma.$queryRaw<
+      { day: Date; key: string | null; calls: bigint; totalTokens: bigint | null; costUsd: number | null }[]
+    >`
+      SELECT date_trunc('day', "createdAt") AS day,
+             ${col} AS key,
+             COUNT(*)::int AS calls,
+             COALESCE(SUM("totalTokens"), 0)::int AS "totalTokens",
+             COALESCE(SUM("costUsd"), 0)::float8 AS "costUsd"
+      FROM llm_usage
+      WHERE "createdAt" >= ${since} AND "createdAt" <= ${until}
+      GROUP BY day, key
+      ORDER BY day ASC
+    `;
+    return rows.map((r) => ({
+      date: new Date(r.day).toISOString().slice(0, 10),
+      key: r.key ?? 'unknown',
+      calls: Number(r.calls),
+      totalTokens: Number(r.totalTokens ?? 0),
+      costUsd: Number((r.costUsd ?? 0).toFixed(4)),
+    }));
+  }
+
+  /** Per-day cost/token/call totals, gap-filled across [since, until] so the
+   *  area chart gets a continuous x-axis even on days with no activity. */
+  private async dailySeries(since: Date, until: Date) {
+    const rows = await this.prisma.$queryRaw<
+      { day: Date; calls: bigint; totalTokens: bigint | null; costUsd: number | null }[]
+    >`
+      SELECT date_trunc('day', "createdAt") AS day,
+             COUNT(*)::int AS calls,
+             COALESCE(SUM("totalTokens"), 0)::int AS "totalTokens",
+             COALESCE(SUM("costUsd"), 0)::float8 AS "costUsd"
+      FROM llm_usage
+      WHERE "createdAt" >= ${since} AND "createdAt" <= ${until}
+      GROUP BY day
+      ORDER BY day ASC
+    `;
+
+    const byDay = new Map(
+      rows.map((r) => [
+        new Date(r.day).toISOString().slice(0, 10),
+        {
+          calls: Number(r.calls),
+          totalTokens: Number(r.totalTokens ?? 0),
+          costUsd: Number((r.costUsd ?? 0).toFixed(4)),
+        },
+      ]),
+    );
+
+    const out: {
+      date: string;
+      calls: number;
+      totalTokens: number;
+      costUsd: number;
+    }[] = [];
+    const cursor = new Date(since);
+    cursor.setUTCHours(0, 0, 0, 0);
+    const end = new Date(until);
+    end.setUTCHours(0, 0, 0, 0);
+    while (cursor <= end) {
+      const key = cursor.toISOString().slice(0, 10);
+      const hit = byDay.get(key);
+      out.push({
+        date: key,
+        calls: hit?.calls ?? 0,
+        totalTokens: hit?.totalTokens ?? 0,
+        costUsd: hit?.costUsd ?? 0,
+      });
+      cursor.setUTCDate(cursor.getUTCDate() + 1);
+    }
+    return out;
   }
 }

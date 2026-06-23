@@ -124,21 +124,162 @@ const SEED_PERSONAS: SeedPersona[] = [
   },
 ];
 
-async function seedPersonas(createdById: number): Promise<void> {
-  for (const p of SEED_PERSONAS) {
+async function seedPersonas(
+  personas: SeedPersona[],
+  createdById: number,
+  publish: boolean,
+): Promise<void> {
+  for (const p of personas) {
     const existing = await prisma.persona.findFirst({ where: { name: p.name } });
-    if (existing) continue;
+    if (existing) {
+      // Re-seed only flips publish state; content is left as-is.
+      if (publish && !existing.isPublished) {
+        await prisma.persona.update({ where: { id: existing.id }, data: { isPublished: true } });
+      }
+      continue;
+    }
     await prisma.persona.create({
       data: {
         name: p.name,
         description: p.description,
         templateData: p.template as unknown as Prisma.InputJsonValue,
         systemPrompt: renderSystemPrompt(p.template),
+        isPublished: publish,
         createdById,
         updatedById: createdById,
         scoreCriteria: { create: p.criteria },
       },
     });
+  }
+}
+
+interface SeedTrainee {
+  employeeId: string;
+  email: string;
+  firstName: string;
+  lastName: string;
+  username: string;
+  password: string;
+}
+
+interface SeedTrainer extends SeedTrainee {
+  persona: SeedPersona;
+  trainees: SeedTrainee[];
+}
+
+// Two test trainers, each owning one published persona and supervising two
+// trainees. Lets the publish + supervisor-visibility rule be exercised end to
+// end: a trainee sees super-admin published personas plus their own trainer's.
+const SEED_TRAINERS: SeedTrainer[] = [
+  {
+    employeeId: 'TRN001',
+    email: 'trainer1@learnium.local',
+    firstName: 'Tina',
+    lastName: 'Trainer',
+    username: 'trainer1',
+    password: 'Trainer@123',
+    persona: {
+      name: 'Refund Rita (Team Nimbus)',
+      description: "Trainer Tina's own persona: customer chasing a late refund.",
+      template: {
+        customerName: 'Rita',
+        customerProfile: 'Customer for 1 year, paid by card.',
+        company: 'Nimbus Telecom',
+        issue: 'You were promised a refund two weeks ago and it has not arrived.',
+        channel: 'chat',
+        emotion: 'frustrated',
+        intensity: 3,
+        desiredOutcome: 'A firm date for the refund or escalation.',
+        resolutionCriteria:
+          'the agent gives a concrete refund date or escalates with a reference number',
+      },
+      criteria: [
+        { name: 'Empathy', maxScore: 10, weight: 2, order: 0 },
+        { name: 'Problem resolution', maxScore: 20, weight: 2, order: 1 },
+      ],
+    },
+    trainees: [
+      { employeeId: 'USR001', email: 'trainee1@learnium.local', firstName: 'Tariq', lastName: 'Trainee', username: 'trainee1', password: 'Trainee@123' },
+      { employeeId: 'USR002', email: 'trainee2@learnium.local', firstName: 'Tara', lastName: 'Trainee', username: 'trainee2', password: 'Trainee@123' },
+    ],
+  },
+  {
+    employeeId: 'TRN002',
+    email: 'trainer2@learnium.local',
+    firstName: 'Theo',
+    lastName: 'Trainer',
+    username: 'trainer2',
+    password: 'Trainer@123',
+    persona: {
+      name: 'Upgrade Uma (Team Vertex)',
+      description: "Trainer Theo's own persona: customer unsure about an upgrade.",
+      template: {
+        customerName: 'Uma',
+        customerProfile: 'Long-time customer weighing a plan upgrade.',
+        company: 'Vertex Appliances',
+        issue: 'You want to know if upgrading is worth it before committing.',
+        channel: 'chat',
+        emotion: 'calm',
+        intensity: 2,
+        desiredOutcome: 'A clear comparison so you can decide.',
+        resolutionCriteria:
+          'the agent explains the upgrade trade-offs clearly and lets the customer decide',
+      },
+      criteria: [
+        { name: 'Clarity', maxScore: 10, weight: 2, order: 0 },
+        { name: 'Needs analysis', maxScore: 10, weight: 2, order: 1 },
+      ],
+    },
+    trainees: [
+      { employeeId: 'USR003', email: 'trainee3@learnium.local', firstName: 'Ravi', lastName: 'Learner', username: 'trainee3', password: 'Trainee@123' },
+      { employeeId: 'USR004', email: 'trainee4@learnium.local', firstName: 'Mei', lastName: 'Learner', username: 'trainee4', password: 'Trainee@123' },
+    ],
+  },
+];
+
+async function seedUser(
+  person: SeedTrainee,
+  roleId: number,
+  supervisorId: number | null,
+  createdById: number,
+): Promise<number> {
+  const user = await prisma.user.upsert({
+    where: { employeeId: person.employeeId },
+    update: { supervisorId: supervisorId ?? null },
+    create: {
+      employeeId: person.employeeId,
+      email: person.email,
+      firstName: person.firstName,
+      lastName: person.lastName,
+      roleId,
+      supervisorId: supervisorId ?? null,
+      createdById,
+      updatedById: createdById,
+    },
+  });
+  await prisma.defaultCredential.upsert({
+    where: { username: person.username },
+    update: {},
+    create: {
+      username: person.username,
+      passwordHash: await argon2.hash(person.password),
+      userId: user.id,
+    },
+  });
+  return user.id;
+}
+
+async function seedTrainersAndTrainees(adminId: number): Promise<void> {
+  const trainerRole = await prisma.roleDef.findUniqueOrThrow({ where: { name: 'TRAINER' } });
+  const userRole = await prisma.roleDef.findUniqueOrThrow({ where: { name: 'USER' } });
+
+  for (const trainer of SEED_TRAINERS) {
+    const trainerId = await seedUser(trainer, trainerRole.id, null, adminId);
+    // Trainer's own persona, published so their trainees can see it.
+    await seedPersonas([trainer.persona], trainerId, true);
+    for (const trainee of trainer.trainees) {
+      await seedUser(trainee, userRole.id, trainerId, adminId);
+    }
   }
 }
 
@@ -179,10 +320,19 @@ async function main() {
     },
   });
 
-  await seedPersonas(adminUser.id);
+  // Super-admin personas: published → visible to every trainee.
+  await seedPersonas(SEED_PERSONAS, adminUser.id, true);
+
+  // Test trainers (each with an own published persona) + their trainees.
+  await seedTrainersAndTrainees(adminUser.id);
 
   const personaCount = await prisma.persona.count({ where: { isDeleted: false } });
-  console.log(`Seed complete. Login: admin / Admin@123. Personas: ${personaCount}`);
+  const publishedCount = await prisma.persona.count({ where: { isDeleted: false, isPublished: true } });
+  console.log('Seed complete.');
+  console.log('  Super admin : admin / Admin@123');
+  console.log('  Trainers    : trainer1 / Trainer@123 , trainer2 / Trainer@123');
+  console.log('  Trainees    : trainee1..trainee4 / Trainee@123 (1-2 under trainer1, 3-4 under trainer2)');
+  console.log(`  Personas    : ${personaCount} total, ${publishedCount} published`);
 }
 
 main()

@@ -23,7 +23,7 @@ export function ThemeToggle() {
           onClick={() => setTheme(value)}
           className={cn(
             'grid size-7 place-items-center rounded text-muted-foreground transition-colors hover:text-foreground',
-            theme === value && 'bg-muted text-foreground',
+            theme === value && 'bg-accent text-accent-foreground',
           )}
         >
           <Icon className="size-4" />

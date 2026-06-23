@@ -29,3 +29,10 @@ export function createQueryClient(): QueryClient {
     },
   })
 }
+
+/**
+ * App-wide singleton. Shared so non-React modules (e.g. auth) can drop the
+ * cache on session change — otherwise queries keyed by endpoint serve the
+ * previous account's data after a switch.
+ */
+export const queryClient = createQueryClient()

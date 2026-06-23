@@ -18,11 +18,12 @@ import { buildRoleplayGraph } from '../../core/llm/roleplay-graph';
 import {
   PersonaTemplateSchema,
   renderSystemPrompt,
+  BEGIN_CUE,
 } from '../../core/llm/persona-prompt.template';
 import { ScoringService } from '../../core/llm/scoring.service';
 import { UsageService } from '../../core/llm/usage.service';
 import { LlmFlowLogger, previewText } from '../../core/llm/llm-flow.logger';
-import { SessionRegistry } from './session-registry';
+import { SessionRegistry, type WsClient } from './session-registry';
 
 const END_SENTINEL = '[CONVERSATION_ENDED]';
 
@@ -104,10 +105,12 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     let graph;
     let resolvedModelId: number | undefined;
     let resolvedModelName: string | undefined;
+    let resolvedProviderType: string | undefined;
     try {
       const resolved = await this.models.resolve(session.persona.conversationModelId);
       resolvedModelId = resolved.id;
       resolvedModelName = resolved.name;
+      resolvedProviderType = resolved.providerType;
       graph = buildRoleplayGraph(
         resolved.chat,
         systemPrompt,
@@ -157,6 +160,13 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     );
     wsClient.modelId = resolvedModelId;
     wsClient.modelName = resolvedModelName;
+    wsClient.providerType = resolvedProviderType;
+
+    // hasStarted lets the client show the start-confirm dialog only on a genuine
+    // first join — never again after a reconnect, where messages already exist.
+    const messageCount = await this.prisma.chatMessage.count({
+      where: { sessionId: session.id },
+    });
 
     this.send(client, {
       type: 'joined',
@@ -164,6 +174,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       personaName: session.persona.name,
       personaColor: session.persona.color ?? null,
       systemPrompt,
+      hasStarted: messageCount > 0,
     });
 
     client.on('message', (raw: RawData) => void this.onMessage(client, raw));
@@ -227,6 +238,35 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       return;
     }
 
+    await this.runAssistantTurn(client, wsClient, content, { persistUser: true });
+  }
+
+  /** Customer opens the conversation. Feeds the internal BEGIN cue (never stored
+   *  as a visible message) so the persona sends the first line in character.
+   *  Idempotent: ignored once the session already has any messages, so reconnects
+   *  or duplicate begins never produce a second opener. */
+  private async handleBegin(client: WebSocket): Promise<void> {
+    const wsClient = this.registry.get(client);
+    if (!wsClient?.sessionDbId || !wsClient.sessionUid || !wsClient.graph) {
+      this.sendError(client, 'NOT_JOINED', 'No active session');
+      return;
+    }
+    const existing = await this.prisma.chatMessage.count({
+      where: { sessionId: wsClient.sessionDbId },
+    });
+    if (existing > 0) return;
+    await this.runAssistantTurn(client, wsClient, BEGIN_CUE, { persistUser: false });
+  }
+
+  /** Run one assistant (customer) turn: optionally persist the human input, then
+   *  stream the persona reply, record telemetry, persist it, and end the session
+   *  if the persona emits the resolution sentinel. */
+  private async runAssistantTurn(
+    client: WebSocket,
+    wsClient: WsClient,
+    content: string,
+    opts: { persistUser: boolean },
+  ): Promise<void> {
     const turnSpan = this.flowLog.start('roleplay_turn', {
       sessionUid: wsClient.sessionUid,
       sessionDbId: wsClient.sessionDbId,
@@ -237,9 +277,11 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       inputPreview: previewText(content),
     });
 
-    await this.prisma.chatMessage.create({
-      data: { sessionId: wsClient.sessionDbId, role: 'user', content },
-    });
+    if (opts.persistUser) {
+      await this.prisma.chatMessage.create({
+        data: { sessionId: wsClient.sessionDbId!, role: 'user', content },
+      });
+    }
 
     // The checkpointer (thread_id = session uid) carries prior turns, so we append
     // only the new message; tokens stream via streamMode "messages". We hold back a
@@ -265,7 +307,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
         threadId: wsClient.sessionUid,
       });
 
-      const stream = (await wsClient.graph.stream(
+      const stream = (await wsClient.graph!.stream(
         { messages: [new HumanMessage(content)] },
         { configurable: { thread_id: wsClient.sessionUid }, streamMode: 'messages' },
       )) as AsyncIterable<[AIMessageChunk, unknown]>;
@@ -317,7 +359,8 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       kind: 'chat',
       modelId: wsClient.modelId ?? null,
       modelName: wsClient.modelName ?? 'unknown',
-      sessionId: wsClient.sessionDbId,
+      providerType: wsClient.providerType ?? null,
+      sessionId: wsClient.sessionDbId!,
       userId: wsClient.userId,
       inputTokens: providerUsage?.inputTokens ?? this.usage.estimateTokens(content),
       outputTokens: providerUsage?.outputTokens ?? this.usage.estimateTokens(fullContent),
@@ -326,7 +369,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     });
 
     const saved = await this.prisma.chatMessage.create({
-      data: { sessionId: wsClient.sessionDbId, role: 'assistant', content: fullContent.trim() },
+      data: { sessionId: wsClient.sessionDbId!, role: 'assistant', content: fullContent.trim() },
     });
 
     this.send(client, {
@@ -349,7 +392,9 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     client: WebSocket,
     frame: Record<string, unknown>,
   ): Promise<void> {
-    if (frame['action'] === 'end') {
+    if (frame['action'] === 'begin') {
+      await this.handleBegin(client);
+    } else if (frame['action'] === 'end') {
       await this.endSession(client);
     }
   }

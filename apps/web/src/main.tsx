@@ -8,11 +8,9 @@ import '@fontsource-variable/jetbrains-mono'
 import '@/styles/globals.css'
 
 import { routeTree } from './routeTree.gen'
-import { createQueryClient } from '@/lib/query-client'
+import { queryClient } from '@/lib/query-client'
 import { useUiStore } from '@/stores/ui'
 import { restoreSession } from '@/services/auth'
-
-const queryClient = createQueryClient()
 
 const router = createRouter({
   routeTree,

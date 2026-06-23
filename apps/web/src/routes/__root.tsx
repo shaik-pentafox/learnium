@@ -1,3 +1,4 @@
+import { lazy, Suspense } from 'react'
 import { createRootRouteWithContext, Outlet } from '@tanstack/react-router'
 import type { QueryClient } from '@tanstack/react-query'
 import { Toaster } from 'react-hot-toast'
@@ -5,6 +6,12 @@ import { Toaster } from 'react-hot-toast'
 export interface RouterContext {
   queryClient: QueryClient
 }
+
+// Dev-only visual-feedback toolbar. The DEV gate dead-code-eliminates the
+// dynamic import in production, so the dev dependency never ships.
+const Agentation = import.meta.env.DEV
+  ? lazy(() => import('agentation').then((m) => ({ default: m.Agentation })))
+  : null
 
 export const Route = createRootRouteWithContext<RouterContext>()({
   component: RootLayout,
@@ -27,6 +34,11 @@ function RootLayout() {
           },
         }}
       />
+      {Agentation && (
+        <Suspense fallback={null}>
+          <Agentation />
+        </Suspense>
+      )}
     </>
   )
 }

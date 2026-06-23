@@ -19,6 +19,7 @@ import { PersonasModule } from './modules/personas/personas.module';
 import { SessionsModule } from './modules/sessions/sessions.module';
 import { RealtimeModule } from './modules/realtime/realtime.module';
 import { LlmOpsModule } from './modules/llm-ops/llm-ops.module';
+import { DashboardModule } from './modules/dashboard/dashboard.module';
 import type { Env } from './core/config/env.schema';
 
 @Module({
@@ -48,6 +49,7 @@ import type { Env } from './core/config/env.schema';
     PersonasModule,
     SessionsModule,
     LlmOpsModule,
+    DashboardModule,
     RealtimeModule,
   ],
   providers: [
