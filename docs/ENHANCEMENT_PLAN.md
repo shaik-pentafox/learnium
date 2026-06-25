@@ -1,4 +1,4 @@
-# ALFA Learnium — Enhancement Plan (v1)
+# ALFA Traineon — Enhancement Plan (v1)
 
 Companion to [PRODUCT_PLAN.md](./PRODUCT_PLAN.md) and [BACKEND_PLAN.md](./BACKEND_PLAN.md). This document amends both with seven enhancements decided after the v2 plan was written. Where this document conflicts with the other two, **this document wins**; the follow-up edits to fold these changes back into PRODUCT_PLAN/BACKEND_PLAN are listed in §10.
 

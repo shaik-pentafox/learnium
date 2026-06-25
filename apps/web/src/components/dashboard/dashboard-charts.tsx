@@ -9,6 +9,8 @@ import { defaultScatterColors } from '@/components/charts/chart-context'
 interface StatusDonutProps {
   completed: number
   abandoned: number
+  /** In-progress sessions (sessions − completed − abandoned). Optional. */
+  ongoing?: number
 }
 
 /** Count up 0 → target, ~0.9s ease-out. */
@@ -27,8 +29,12 @@ function useCountUp(target: number): number {
 
 /** Session outcomes (completed vs abandoned) as a ring donut with an animated
  *  completion rate in the center. Uses the shared chart palette. */
-export function StatusDonut({ completed, abandoned }: StatusDonutProps) {
-  const total = completed + abandoned
+export function StatusDonut({
+  completed,
+  abandoned,
+  ongoing = 0,
+}: StatusDonutProps) {
+  const total = completed + abandoned + ongoing
   const rate = total > 0 ? Math.round((completed / total) * 100) : 0
   const animatedRate = useCountUp(rate)
 
@@ -42,8 +48,11 @@ export function StatusDonut({ completed, abandoned }: StatusDonutProps) {
 
   const rings = [
     { label: 'Completed', value: completed, color: defaultScatterColors[0] },
+    { label: 'Ongoing', value: ongoing, color: defaultScatterColors[2] },
     { label: 'Abandoned', value: abandoned, color: defaultScatterColors[1] },
-  ].map((r) => ({ ...r, maxValue: total }))
+  ]
+    .filter((r) => r.value > 0)
+    .map((r) => ({ ...r, maxValue: total }))
 
   return (
     <div className="flex w-full justify-center py-2">

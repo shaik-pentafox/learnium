@@ -12,14 +12,33 @@ export interface SessionScore {
   feedback?: string | null
 }
 
+export interface SessionUser {
+  id: number
+  firstName: string
+  lastName: string
+  employeeId?: string | null
+}
+
 export interface SessionSummary {
   id: number
   uid: string
   status: SessionStatus
+  isSimulation?: boolean
   persona: { id: number; name: string }
+  user?: SessionUser
   scores: SessionScore[]
   startedAt: string
-  endedAt?: string
+  endedAt?: string | null
+}
+
+export interface SessionTiming {
+  /** Total session wall-clock (ms); null until the session ends. */
+  durationMs: number | null
+  turns: number
+  /** Avg trainee response/think time (ms) — user performance. */
+  avgUserResponseMs: number | null
+  /** Avg LLM generation time (ms) — model performance. */
+  avgLlmLatencyMs: number | null
 }
 
 export interface SessionDetail {
@@ -31,6 +50,7 @@ export interface SessionDetail {
   persona: { id: number; name: string }
   startedAt: string
   endedAt?: string | null
+  timing?: SessionTiming
 }
 
 export interface SessionListData {

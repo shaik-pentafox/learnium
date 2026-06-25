@@ -87,12 +87,12 @@ interface MockModel {
 let MOCK_MODELS: MockModel[] = [
   {
     id: 1, name: 'gpt-4o', providerId: 1, provider: { id: 1, name: 'OpenAI' },
-    capabilities: ['chat', 'vision'], contextWindowTokens: 128000,
+    capabilities: ['conversation', 'scoring', 'vision'], contextWindowTokens: 128000,
     inputPricePerMillion: 5, outputPricePerMillion: 15, isDefault: true,
   },
   {
     id: 2, name: 'gemini-1.5-pro', providerId: 2, provider: { id: 2, name: 'Google Gemini' },
-    capabilities: ['chat'], contextWindowTokens: 1000000,
+    capabilities: ['conversation', 'scoring'], contextWindowTokens: 1000000,
     inputPricePerMillion: 3.5, outputPricePerMillion: 10.5, isDefault: false,
   },
   {
@@ -338,7 +338,7 @@ export const handlers = [
       return ok({
         firstName: 'Theo',
         role: 'TRAINER',
-        totals: { trainees: 3, sessions: 24, completed: 19, abandoned: 3, avgScorePct: 72 },
+        totals: { trainees: 3, sessions: 24, completed: 19, abandoned: 3, avgScorePct: 72, avgResponseMs: 8400, avgLlmLatencyMs: 2100 },
         trainees: [
           { id: 4, name: 'Mark Smith', sessions: 7, completed: 5, avgScorePct: 54, lastActiveAt: new Date(now - 12 * 86_400_000).toISOString() },
           { id: 5, name: 'Rosa Lee', sessions: 8, completed: 6, avgScorePct: 68, lastActiveAt: new Date(now - 2 * 86_400_000).toISOString() },
@@ -367,7 +367,7 @@ export const handlers = [
       return ok({
         firstName: 'Jane',
         role: 'USER',
-        totals: { sessions: 6, completed: 5, abandoned: 1, avgScorePct: 78, bestScorePct: 92 },
+        totals: { sessions: 6, completed: 5, abandoned: 1, avgScorePct: 78, bestScorePct: 92, avgResponseMs: 7200, avgLlmLatencyMs: 1900 },
         byPersona: [
           { personaName: 'Double-charged Dana', sessions: 3, avgScorePct: 82 },
           { personaName: 'Angry Alex', sessions: 2, avgScorePct: 64 },
@@ -396,6 +396,8 @@ export const handlers = [
         publishedPersonas: 6,
         sessions: 140,
         completed: 118,
+        avgResponseMs: 9100,
+        avgLlmLatencyMs: 2300,
       },
     })
   }),
@@ -539,8 +541,8 @@ export const handlers = [
       until: new Date(now).toISOString(),
       totals: { calls: 128, totalTokens: 412_345, costUsd: 3.87 },
       byModel: [
-        { modelName: 'gpt-4o', calls: 90, totalTokens: 320_000, costUsd: 3.2 },
-        { modelName: 'gemini-1.5-pro', calls: 38, totalTokens: 92_345, costUsd: 0.67 },
+        { modelName: 'gpt-4o', calls: 90, totalTokens: 320_000, costUsd: 3.2, avgLatencyMs: 1980 },
+        { modelName: 'gemini-1.5-pro', calls: 38, totalTokens: 92_345, costUsd: 0.67, avgLatencyMs: 2450 },
       ],
       byProvider: [
         { label: 'openai', calls: 90, totalTokens: 320_000, costUsd: 3.2 },
@@ -557,6 +559,49 @@ export const handlers = [
         { id: 1, kind: 'chat', modelName: 'gpt-4o', sessionId: 1, userId: 1, inputTokens: 1200, outputTokens: 340, totalTokens: 1540, costUsd: 0.0111, estimated: false, latencyMs: 1820, createdAt: new Date(now - 5 * 60_000).toISOString() },
         { id: 2, kind: 'scoring', modelName: 'gpt-4o', sessionId: 1, userId: 1, inputTokens: 2100, outputTokens: 180, totalTokens: 2280, costUsd: 0.0132, estimated: true, latencyMs: 2600, createdAt: new Date(now - 60 * 60_000).toISOString() },
       ],
+    })
+  }),
+
+  http.get(`${BASE}/llm/usage/calls`, ({ request }) => {
+    if (!request.headers.get('Authorization')) {
+      return fail('UNAUTHORIZED', 'Missing credentials', 401)
+    }
+    const url = new URL(request.url)
+    const page = Number(url.searchParams.get('page') ?? '1')
+    const limit = Number(url.searchParams.get('limit') ?? '20')
+    const kinds = (url.searchParams.get('kind') ?? '').split(',').filter(Boolean)
+    const modelsF = (url.searchParams.get('model') ?? '').split(',').filter(Boolean)
+
+    const now = Date.now()
+    const MODELS = ['gpt-4o', 'gemini-1.5-pro', 'claude-3-5-sonnet']
+    const KINDS = ['chat', 'scoring']
+    const all = Array.from({ length: 47 }, (_, i) => ({
+      id: i + 1,
+      kind: KINDS[i % 2],
+      modelName: MODELS[i % 3],
+      sessionId: 1,
+      userId: 1,
+      inputTokens: 1000 + i * 13,
+      outputTokens: 200 + i * 7,
+      totalTokens: 1200 + i * 20,
+      costUsd: Number((0.008 + i * 0.0003).toFixed(4)),
+      estimated: i % 5 === 0,
+      latencyMs: 1500 + (i % 9) * 180,
+      createdAt: new Date(now - i * 37 * 60_000).toISOString(),
+    }))
+    const filtered = all.filter(
+      (r) =>
+        (kinds.length === 0 || kinds.includes(r.kind)) &&
+        (modelsF.length === 0 || modelsF.includes(r.modelName)),
+    )
+    const start = (page - 1) * limit
+    return ok({
+      rows: filtered.slice(start, start + limit),
+      total: filtered.length,
+      page,
+      limit,
+      totalPages: Math.max(1, Math.ceil(filtered.length / limit)),
+      facets: { kinds: KINDS, models: MODELS },
     })
   }),
 
@@ -616,6 +661,66 @@ export const handlers = [
     })
   }),
 
+  http.get(`${BASE}/dashboard/report/trainers`, ({ request }) => {
+    if (!request.headers.get('Authorization')) {
+      return fail('UNAUTHORIZED', 'Missing credentials', 401)
+    }
+    const url = new URL(request.url)
+    const page = Number(url.searchParams.get('page') ?? '1')
+    const limit = Number(url.searchParams.get('limit') ?? '20')
+    const q = (url.searchParams.get('q') ?? '').toLowerCase()
+    const all = Array.from({ length: 13 }, (_, i) => ({
+      id: i + 1,
+      name: `Trainer ${i + 1}`,
+      email: `trainer${i + 1}@acme.io`,
+      trainees: 2 + (i % 5),
+      sessions: 10 + i * 3,
+      completed: 6 + i * 2,
+      avgScorePct: i % 4 === 0 ? null : 55 + ((i * 7) % 40),
+    }))
+    const filtered = q
+      ? all.filter((t) => t.name.toLowerCase().includes(q) || t.email.toLowerCase().includes(q))
+      : all
+    const start = (page - 1) * limit
+    return ok({
+      rows: filtered.slice(start, start + limit),
+      total: filtered.length,
+      page,
+      limit,
+      totalPages: Math.max(1, Math.ceil(filtered.length / limit)),
+    })
+  }),
+
+  http.get(`${BASE}/dashboard/report/personas`, ({ request }) => {
+    if (!request.headers.get('Authorization')) {
+      return fail('UNAUTHORIZED', 'Missing credentials', 401)
+    }
+    const url = new URL(request.url)
+    const page = Number(url.searchParams.get('page') ?? '1')
+    const limit = Number(url.searchParams.get('limit') ?? '20')
+    const q = (url.searchParams.get('q') ?? '').toLowerCase()
+    const published = url.searchParams.get('published')
+    const all = Array.from({ length: 17 }, (_, i) => ({
+      id: i + 1,
+      name: `Persona ${i + 1}`,
+      owner: i % 2 === 0 ? 'Ada Admin' : 'Theo Trainer',
+      published: i % 3 !== 0,
+      sessions: i * 4,
+      avgScorePct: i % 5 === 0 ? null : 50 + ((i * 9) % 45),
+    }))
+    let filtered = q ? all.filter((p) => p.name.toLowerCase().includes(q)) : all
+    if (published === 'true') filtered = filtered.filter((p) => p.published)
+    if (published === 'false') filtered = filtered.filter((p) => !p.published)
+    const start = (page - 1) * limit
+    return ok({
+      rows: filtered.slice(start, start + limit),
+      total: filtered.length,
+      page,
+      limit,
+      totalPages: Math.max(1, Math.ceil(filtered.length / limit)),
+    })
+  }),
+
   http.get(`${BASE}/sessions/:uid`, ({ request, params }) => {
     if (!request.headers.get('Authorization')) {
       return fail('UNAUTHORIZED', 'Missing credentials', 401)
@@ -628,6 +733,12 @@ export const handlers = [
       persona: { id: 1, name: 'Double-charged Dana' },
       startedAt: new Date().toISOString(),
       endedAt: null,
+      timing: {
+        durationMs: 184_000,
+        turns: 8,
+        avgUserResponseMs: 7200,
+        avgLlmLatencyMs: 1900,
+      },
     })
   }),
 

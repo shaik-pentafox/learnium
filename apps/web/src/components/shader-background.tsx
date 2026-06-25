@@ -11,7 +11,7 @@ const vertexShader = /* glsl */ `
 `
 
 /**
- * Layered "topographic paper" shader, recolored to the Learnium signature
+ * Layered "topographic paper" shader, recolored to the Traineon signature
  * gradient (indigo -> violet -> deep indigo). Reserved for brand moments
  * (login, score-reveal, empty states) per docs/DESIGN.md — never UI chrome.
  */
@@ -61,7 +61,7 @@ const fragmentShader = /* glsl */ `
     float layer = floor(scaledN);
     float fraction = fract(scaledN);
 
-    // Learnium brand stops: indigo-400 -> deep violet.
+    // Traineon brand stops: indigo-400 -> deep violet.
     vec3 indigo = vec3(0.506, 0.549, 0.973); // #818cf8
     vec3 violet = vec3(0.545, 0.361, 0.965); // #8b5cf6
     vec3 deep   = vec3(0.121, 0.098, 0.345); // #1f1958

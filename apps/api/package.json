@@ -1,5 +1,5 @@
 {
-  "name": "@learnium/api",
+  "name": "@traineon/api",
   "version": "0.0.1",
   "private": true,
   "scripts": {
@@ -9,7 +9,8 @@
     "test": "jest",
     "test:integration": "jest --config jest.integration.json",
     "lint": "eslint 'src/**/*.ts'",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "seed:llm": "ts-node --project tsconfig.json prisma/seed-llm.ts"
   },
   "dependencies": {
     "@clickhouse/client": "^1.8.2",
@@ -19,7 +20,7 @@
     "@langchain/langgraph": "^1.4.2",
     "@langchain/langgraph-checkpoint-postgres": "^1.0.3",
     "@langchain/openai": "^1.4.7",
-    "@learnium/contracts": "*",
+    "@traineon/contracts": "*",
     "@nestjs/bullmq": "^11.0.4",
     "@nestjs/common": "^11.0.0",
     "@nestjs/config": "^4.0.0",
@@ -52,7 +53,7 @@
     "seed": "ts-node --project tsconfig.json prisma/seed.ts"
   },
   "devDependencies": {
-    "@learnium/tsconfig": "*",
+    "@traineon/tsconfig": "*",
     "@nestjs/cli": "^11.0.0",
     "@nestjs/schematics": "^11.0.0",
     "@nestjs/testing": "^11.0.0",

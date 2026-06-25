@@ -1,6 +1,6 @@
-# Learnium
+# Traineon
 
-> Working name — the product will be named later. Referred to as **Learnium** for now.
+> Working name — the product will be named later. Referred to as **Traineon** for now.
 
 AI roleplay training platform: a NestJS backend with a planned React SPA frontend.
 

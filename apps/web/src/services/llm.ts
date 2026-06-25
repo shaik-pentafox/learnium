@@ -172,6 +172,8 @@ export interface UsageByModel {
   calls: number
   totalTokens: number
   costUsd: number
+  /** Avg generation latency (ms) for this model — null if none recorded. */
+  avgLatencyMs: number | null
 }
 
 export interface UsageRow {
@@ -239,8 +241,42 @@ export async function listUsage(params: UsageParams = {}): Promise<UsageSummary>
   return apiGet<UsageSummary>('/llm/usage', { params })
 }
 
+export interface UsageCallsData {
+  rows: UsageRow[]
+  total: number
+  page: number
+  limit: number
+  totalPages: number
+  /** Distinct values available for each filter, regardless of active filter. */
+  facets: { kinds: string[]; models: string[] }
+}
+
+export interface UsageCallsParams {
+  page?: number
+  limit?: number
+  kind?: string[]
+  model?: string[]
+}
+
+/** GET /llm/usage/calls — paginated, kind/model-filterable call log. */
+export async function listUsageCalls(
+  params: UsageCallsParams = {},
+): Promise<UsageCallsData> {
+  const { page, limit, kind, model } = params
+  return apiGet<UsageCallsData>('/llm/usage/calls', {
+    params: {
+      ...(page ? { page } : {}),
+      ...(limit ? { limit } : {}),
+      ...(kind && kind.length ? { kind: kind.join(',') } : {}),
+      ...(model && model.length ? { model: model.join(',') } : {}),
+    },
+  })
+}
+
 export const llmKeys = {
   providers: () => [...queryKeys.llmOps, 'providers'] as const,
   models: () => [...queryKeys.llmOps, 'models'] as const,
   usage: (params: UsageParams) => [...queryKeys.llmOps, 'usage', params] as const,
+  usageCalls: (params: UsageCallsParams) =>
+    [...queryKeys.llmOps, 'usage-calls', params] as const,
 }

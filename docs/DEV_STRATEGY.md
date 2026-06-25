@@ -1,4 +1,4 @@
-# ALFA Learnium — Development Strategy
+# ALFA Traineon — Development Strategy
 
 > This document is the **single source of truth** for how we build the NestJS backend.
 > Read this at the start of every session. It tells you: what's done, what's next, and how we work.
@@ -368,7 +368,7 @@ Claude will always provide curls for:
 ```bash
 # 1. Clone + install
 git clone <repo>
-cd alfa-learnium
+cd alfa-traineon
 npm install
 
 # 2. Copy env

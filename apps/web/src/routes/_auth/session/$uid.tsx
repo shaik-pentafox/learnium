@@ -8,6 +8,8 @@ import {
 import { useQuery } from '@tanstack/react-query'
 import { SendHorizonal, Mic, FlaskConical } from 'lucide-react'
 import { getSession, sessionKeys } from '@/services/sessions'
+import type { SessionTiming } from '@/services/sessions'
+import { fmtMs } from '@/components/dashboard/primitives'
 import { abandonSession } from '@/services/roleplay'
 import { useRoleplaySession } from '@/features/roleplay/use-roleplay-session'
 import type { ChannelStatus } from '@/lib/ws-client'
@@ -19,6 +21,7 @@ import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Orb, type AgentState } from '@/components/chat/orb'
 import { MarkdownText } from '@/components/chat/markdown'
+import { ShimmeringText } from '@/components/shimmering-text'
 import { useSidebar } from '@/components/ui/sidebar'
 import {
   Dialog,
@@ -84,11 +87,22 @@ function ChatSession() {
     }
   }, [session.error])
 
+  // Session timing (duration, avg reply/latency) is computed server-side at
+  // fetch time, so it's empty until the session ends. Refetch once on end to
+  // pull the populated figures for the score reveal.
+  useEffect(() => {
+    if (session.ended) void detail.refetch()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session.ended])
+
   // Block in-app navigation away from a live session (and arm the browser's
   // native refresh/close prompt). Resolved via the leave-confirm dialog.
+  // Once scoring has started (ending) or finished (ended) there's nothing to
+  // abandon, so don't prompt — only block while the conversation is live.
   const blocker = useBlocker({
-    shouldBlockFn: () => !session.ended && !leavingRef.current,
-    enableBeforeUnload: () => !session.ended,
+    shouldBlockFn: () =>
+      !session.ended && !session.ending && !leavingRef.current,
+    enableBeforeUnload: () => !session.ended && !session.ending,
     withResolver: true,
   })
 
@@ -127,7 +141,7 @@ function ChatSession() {
     setDraft('')
   }
 
-  const canChat = session.status === 'open' && !session.ended
+  const canChat = session.status === 'open' && !session.ended && !session.ending
   const orbColors = personaOrbColors(session.personaColor)
   // No voice yet: idle persona "listens", streams as "talking".
   const orbState: AgentState =
@@ -210,9 +224,9 @@ function ChatSession() {
             variant="secondary"
             size="sm"
             onClick={session.endSession}
-            disabled={session.status !== 'open'}
+            disabled={session.status !== 'open' || session.ending}
           >
-            End &amp; score
+            {session.ending ? 'Scoring…' : 'End & score'}
           </Button>
         )}
       </header>
@@ -224,6 +238,12 @@ function ChatSession() {
         </div>
       )}
 
+      {!session.ended &&
+        !session.ending &&
+        (session.status === 'reconnecting' || session.status === 'closed') && (
+          <ReconnectBanner status={session.status} />
+        )}
+
       {/* Transcript */}
       <Conversation className="rounded-xl border border-border bg-surface">
         <ConversationContent className="space-y-1">
@@ -233,13 +253,20 @@ function ChatSession() {
           {session.messages.map((m) => (
             <Bubble key={m.localId} message={m} />
           ))}
-          {session.thinking && session.messages.at(-1)?.role !== 'assistant' && (
-            <TypingBubble />
+          {session.thinking &&
+            !session.ending &&
+            session.messages.at(-1)?.role !== 'assistant' && <TypingBubble />}
+          {session.ending && !session.ended && (
+            <ScoringIndicator
+              colors={orbColors}
+              connected={session.status === 'open'}
+            />
           )}
           {session.ended && (
             <ScoreReveal
               scores={(session.scores ?? []) as ScoreRow[]}
               feedback={session.feedback}
+              timing={detail.data?.timing}
             />
           )}
         </ConversationContent>
@@ -252,6 +279,18 @@ function ChatSession() {
           <Link to={backTo} className="text-sm text-primary hover:underline">
             ← Back
           </Link>
+        </div>
+      ) : session.ending ? (
+        <div className="mt-3 flex items-center justify-center gap-2 rounded-xl border border-border bg-background p-3 shadow-sm shadow-black/5">
+          <Dot /> <Dot /> <Dot />
+          <ShimmeringText
+            text={
+              session.status === 'open'
+                ? 'Scoring your conversation…'
+                : 'Reconnecting…'
+            }
+            className="text-sm"
+          />
         </div>
       ) : (
         <div className="mt-3 flex items-end gap-2 rounded-xl border border-border bg-background p-2 shadow-sm shadow-black/5">
@@ -328,6 +367,57 @@ function Bubble({ message }: { message: ChatMessage }) {
   )
 }
 
+/** Shown between "End & score" and the scored result — the orb pulses while
+ *  the backend grades the transcript. If the socket drops mid-scoring, it
+ *  surfaces the reconnect state instead of spinning forever. */
+function ScoringIndicator({
+  colors,
+  connected,
+}: {
+  colors: [string, string]
+  connected: boolean
+}) {
+  return (
+    <div className="flex flex-col items-center justify-center gap-4 py-10 text-center">
+      <Orb
+        colors={colors}
+        agentState={connected ? 'thinking' : null}
+        className="size-20"
+      />
+      <ShimmeringText
+        text={
+          connected
+            ? 'Scoring your conversation…'
+            : 'Connection lost — reconnecting to fetch your score…'
+        }
+        className="text-sm font-medium"
+      />
+    </div>
+  )
+}
+
+/** Mid-session disconnect notice (reconnecting/closed before scoring). */
+function ReconnectBanner({ status }: { status: ChannelStatus }) {
+  const closed = status === 'closed'
+  return (
+    <div
+      className={cn(
+        'mb-3 flex items-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium',
+        closed
+          ? 'border-destructive/40 bg-destructive/10 text-destructive'
+          : 'border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-400',
+      )}
+    >
+      <span className="inline-flex gap-1">
+        <Dot /> <Dot /> <Dot />
+      </span>
+      {closed
+        ? 'Disconnected. Trying to restore the session…'
+        : 'Reconnecting… messages will resume automatically.'}
+    </div>
+  )
+}
+
 function TypingBubble() {
   return (
     <div className="flex justify-start py-1.5">
@@ -389,12 +479,43 @@ function scoreTone(pct: number): string {
   return 'text-destructive'
 }
 
+function fmtDuration(ms: number | null): string {
+  if (ms === null) return '—'
+  const totalSec = Math.round(ms / 1000)
+  const m = Math.floor(totalSec / 60)
+  const s = totalSec % 60
+  return m > 0 ? `${m}m ${s}s` : `${s}s`
+}
+
+function TimingStrip({ timing }: { timing: SessionTiming }) {
+  const cells: { label: string; value: string }[] = [
+    { label: 'Duration', value: fmtDuration(timing.durationMs) },
+    { label: 'Turns', value: String(timing.turns) },
+    { label: 'Your avg reply', value: fmtMs(timing.avgUserResponseMs) },
+    { label: 'AI avg reply', value: fmtMs(timing.avgLlmLatencyMs) },
+  ]
+  return (
+    <div className="grid grid-cols-2 gap-3 rounded-lg border border-border bg-background p-3 sm:grid-cols-4">
+      {cells.map((c) => (
+        <div key={c.label} className="text-center">
+          <div className="font-data text-lg font-semibold tabular-nums text-primary">
+            {c.value}
+          </div>
+          <div className="mt-0.5 text-xs text-muted-foreground">{c.label}</div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 function ScoreReveal({
   scores,
   feedback,
+  timing,
 }: {
   scores: ScoreRow[]
   feedback: string | null
+  timing?: SessionTiming
 }) {
   const pct = overallPct(scores)
   return (
@@ -414,6 +535,7 @@ function ScoreReveal({
       </div>
 
       <div className="space-y-4 p-4">
+        {timing && <TimingStrip timing={timing} />}
         {feedback && (
           <MarkdownText className="text-sm text-muted-foreground">
             {feedback}

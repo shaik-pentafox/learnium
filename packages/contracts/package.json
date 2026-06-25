@@ -1,5 +1,5 @@
 {
-  "name": "@learnium/contracts",
+  "name": "@traineon/contracts",
   "version": "0.0.1",
   "private": true,
   "main": "./dist/index.js",
@@ -12,7 +12,7 @@
     "zod": "^3.23.8"
   },
   "devDependencies": {
-    "@learnium/tsconfig": "*",
+    "@traineon/tsconfig": "*",
     "typescript": "^5.5.4"
   }
 }

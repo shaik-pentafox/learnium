@@ -1,6 +1,22 @@
 import { useEffect, useState, type ReactNode } from 'react'
+import { Link } from '@tanstack/react-router'
+import { ArrowRight } from 'lucide-react'
 import { animate } from 'motion/react'
 import { cn } from '@/lib/utils'
+
+/** "View all →" link to a Report tab, used as a Tile action on previews. */
+export function ViewAll({ tab }: { tab: string }) {
+  return (
+    <Link
+      to="/report"
+      search={{ tab }}
+      className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline [&_svg]:size-3.5"
+    >
+      View all
+      <ArrowRight />
+    </Link>
+  )
+}
 
 interface StatCardProps {
   label: string
@@ -127,6 +143,49 @@ export function StatusBadge({ status }: { status: string }) {
 
 export function scoreLabel(pct: number | null): string {
   return pct === null ? '—' : `${pct}%`
+}
+
+/** Human-readable latency: sub-second in ms, otherwise seconds (1 dp). */
+export function fmtMs(ms: number | null): string {
+  if (ms === null) return '—'
+  if (ms < 1000) return `${ms}ms`
+  return `${(ms / 1000).toFixed(1)}s`
+}
+
+interface TimingCell {
+  label: string
+  value: number | null
+  hint?: string
+}
+
+/** Two-up timing panel: trainee reply time (user perf) beside LLM latency
+ *  (model perf). Reused across role dashboards. */
+export function TimingTile({
+  cells,
+  className,
+}: {
+  cells: TimingCell[]
+  className?: string
+}) {
+  return (
+    <Tile title="Response times" className={className}>
+      <div className="grid flex-1 grid-cols-2 gap-4">
+        {cells.map((c) => (
+          <div key={c.label} className="flex flex-col justify-center">
+            <span className="text-xs font-medium text-muted-foreground">
+              {c.label}
+            </span>
+            <span className="mt-1.5 font-data text-2xl font-semibold leading-none tracking-tight text-primary tabular-nums">
+              {fmtMs(c.value)}
+            </span>
+            {c.hint && (
+              <span className="mt-1 text-xs text-muted-foreground">{c.hint}</span>
+            )}
+          </div>
+        ))}
+      </div>
+    </Tile>
+  )
 }
 
 export function DashboardSkeleton() {

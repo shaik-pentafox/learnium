@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link } from '@tanstack/react-router'
-import { MessagesSquare, CheckCircle2, Target, Award } from 'lucide-react'
+import { MessagesSquare, CheckCircle2, Target, Award, Timer } from 'lucide-react'
 import type {
   TraineeSummary,
   TraineePersonaStat,
@@ -14,10 +14,11 @@ import { XAxis } from '@/components/charts/x-axis'
 import { YAxis } from '@/components/charts/y-axis'
 import { ChartTooltip } from '@/components/charts/tooltip'
 import { chartCssVars } from '@/components/charts/chart-context'
-import { StatCard, Tile, StatusBadge, scoreLabel } from './primitives'
+import { StatCard, Tile, StatusBadge, scoreLabel, fmtMs, ViewAll } from './primitives'
 import { StatusDonut } from './dashboard-charts'
 
 const LOW_SCORE_PCT = 60
+const PREVIEW = 5
 
 function scoreBarColor(pct: number | null): string {
   if (pct === null) return 'bg-muted'
@@ -90,7 +91,7 @@ export function TraineeDashboard({ data }: { data: TraineeSummary }) {
   const hasActivity = windowed.some((p) => p.sessions > 0)
 
   return (
-    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-5">
       <StatCard label="Sessions" value={totals.sessions} icon={<MessagesSquare />} />
       <StatCard
         label="Completed"
@@ -104,6 +105,12 @@ export function TraineeDashboard({ data }: { data: TraineeSummary }) {
       />
       <StatCard label="Average score" value={scoreLabel(totals.avgScorePct)} icon={<Target />} />
       <StatCard label="Best score" value={scoreLabel(totals.bestScorePct)} icon={<Award />} />
+      <StatCard
+        label="Your avg reply"
+        value={fmtMs(totals.avgResponseMs)}
+        icon={<Timer />}
+        hint="response speed"
+      />
 
       <Tile
         title="Activity"
@@ -119,7 +126,8 @@ export function TraineeDashboard({ data }: { data: TraineeSummary }) {
           <AreaChart
             key={actMetric}
             data={chartData}
-            aspectRatio="4 / 1"
+            aspectRatio="auto"
+            className="min-h-64 flex-1"
             margin={{ top: 16, right: 16, bottom: 44, left: 44 }}
           >
             <Grid horizontal />
@@ -146,18 +154,22 @@ export function TraineeDashboard({ data }: { data: TraineeSummary }) {
         )}
       </Tile>
 
-      <Tile title="Session outcomes" className="sm:col-span-2 xl:col-span-1">
+      <Tile title="Session outcomes" className="sm:col-span-2 xl:col-span-2">
         <div className="flex flex-1 items-center justify-center">
           <StatusDonut completed={totals.completed} abandoned={totals.abandoned} />
         </div>
       </Tile>
 
-      <Tile title="By scenario" className="sm:col-span-2">
+      <Tile
+        title="Personas"
+        className="sm:col-span-2 xl:col-span-2"
+        action={<ViewAll tab="scenarios" />}
+      >
         {byPersona.length === 0 ? (
           <p className="py-8 text-center text-sm text-muted-foreground">No sessions yet.</p>
         ) : (
-          <ul className="max-h-72 divide-y divide-border overflow-y-auto scrollbar-hide">
-            {byPersona.map((p) => (
+          <ul className="divide-y divide-border">
+            {byPersona.slice(0, PREVIEW).map((p) => (
               <PersonaRow key={p.personaName} row={p} />
             ))}
           </ul>
@@ -166,17 +178,20 @@ export function TraineeDashboard({ data }: { data: TraineeSummary }) {
 
       <Tile
         title="Recent sessions"
-        className="sm:col-span-2"
+        className="sm:col-span-2 xl:col-span-3"
         action={
-          <Link to="/arena" className={buttonVariants({ size: 'sm' })}>
-            Practice
-          </Link>
+          <div className="flex items-center gap-3">
+            <ViewAll tab="sessions" />
+            <Link to="/arena" className={buttonVariants({ size: 'sm' })}>
+              Practice
+            </Link>
+          </div>
         }
       >
         {recent.length === 0 ? (
           <p className="py-8 text-center text-sm text-muted-foreground">No sessions yet.</p>
         ) : (
-          <ul className="max-h-72 divide-y divide-border overflow-y-auto scrollbar-hide">
+          <ul className="divide-y divide-border">
             {recent.map((r) => (
               <RecentRow key={r.uid} row={r} />
             ))}

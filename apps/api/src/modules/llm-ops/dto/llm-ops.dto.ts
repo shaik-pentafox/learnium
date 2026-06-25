@@ -29,6 +29,28 @@ export const ModelQueryDtoSchema = z.object({
   capability: z.string().optional(),
 });
 
+/** Comma-separated list → string[] (drops blanks); single value also works. */
+const csvList = z
+  .string()
+  .optional()
+  .transform((v) =>
+    v
+      ? v
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean)
+      : [],
+  );
+
+export const UsageCallsQueryDtoSchema = z.object({
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+  kind: csvList,
+  model: csvList,
+});
+
+export type UsageCallsQueryDto = z.infer<typeof UsageCallsQueryDtoSchema>;
+
 export type CreateProviderDto = z.infer<typeof CreateProviderDtoSchema>;
 export type UpdateProviderDto = z.infer<typeof UpdateProviderDtoSchema>;
 export type CreateModelDto = z.infer<typeof CreateModelDtoSchema>;

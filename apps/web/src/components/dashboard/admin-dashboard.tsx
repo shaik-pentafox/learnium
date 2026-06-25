@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { Link } from '@tanstack/react-router'
 import { useQuery, keepPreviousData } from '@tanstack/react-query'
-import { Users, Drama, MessagesSquare, Coins } from 'lucide-react'
+import { Users, Drama, MessagesSquare, Coins, Timer } from 'lucide-react'
 import type { DateRange } from 'react-day-picker'
 import type { AdminSummary } from '@/services/dashboard'
 import { listUsage, llmKeys, type UsageKeySeriesPoint } from '@/services/llm'
@@ -16,7 +16,7 @@ import {
   chartCssVars,
   defaultScatterColors,
 } from '@/components/charts/chart-context'
-import { StatCard, Tile } from './primitives'
+import { StatCard, Tile, fmtMs, ViewAll } from './primitives'
 import { PeriodFilter } from './period-filter'
 import { ProviderDonut, RankedBars } from './usage-breakdowns'
 
@@ -104,7 +104,7 @@ export function AdminDashboard({ data }: { data: AdminSummary }) {
   }, [usage.data, groupBy, metric])
 
   return (
-    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-5">
       <StatCard label="Users" value={totals.users} icon={<Users />} hint={`${totals.trainers} trainers · ${totals.trainees} trainees`} />
       <StatCard label="Personas" value={totals.personas} icon={<Drama />} hint={`${totals.publishedPersonas} published`} />
       <StatCard label="Sessions" value={totals.sessions} icon={<MessagesSquare />} hint={`${totals.completed} completed`} />
@@ -113,6 +113,12 @@ export function AdminDashboard({ data }: { data: AdminSummary }) {
         value={usage.data ? money(usage.data.totals.costUsd) : '…'}
         icon={<Coins />}
         hint={usage.data ? `${usage.data.totals.calls} calls` : undefined}
+      />
+      <StatCard
+        label="AI avg latency"
+        value={fmtMs(totals.avgLlmLatencyMs)}
+        icon={<Timer />}
+        hint="model generation"
       />
 
       <Tile
@@ -153,14 +159,15 @@ export function AdminDashboard({ data }: { data: AdminSummary }) {
         ) : (
           <div
             className={cn(
-              'transition-opacity duration-500 ease-in-out',
+              'flex flex-1 flex-col transition-opacity duration-500 ease-in-out',
               usage.isPlaceholderData && 'opacity-50',
             )}
           >
             <AreaChart
               key={`${groupBy}-${metric}-${usage.data?.since ?? ''}-${usage.data?.until ?? ''}`}
               data={chartData}
-              aspectRatio="3 / 1"
+              aspectRatio="auto"
+              className="min-h-64 flex-1"
               margin={{ top: 16, right: 16, bottom: 44, left: 52 }}
             >
               <Grid horizontal />
@@ -183,10 +190,14 @@ export function AdminDashboard({ data }: { data: AdminSummary }) {
 
       {usage.data && (
         <>
-          <Tile title="By provider" className="sm:col-span-2 xl:col-span-1">
+          <Tile
+            title="By provider"
+            className="sm:col-span-2 xl:col-span-2"
+            action={<ViewAll tab="providers" />}
+          >
             <ProviderDonut data={usage.data.byProvider} metric={metric} />
           </Tile>
-          <Tile title="By model" className="sm:col-span-2">
+          <Tile title="By model" className="sm:col-span-2 xl:col-span-3" action={<ViewAll tab="models" />}>
             <RankedBars
               metric={metric}
               data={usage.data.byModel.map((m) => ({
@@ -195,7 +206,7 @@ export function AdminDashboard({ data }: { data: AdminSummary }) {
               }))}
             />
           </Tile>
-          <Tile title="By kind" className="sm:col-span-2">
+          <Tile title="By kind" className="sm:col-span-2 xl:col-span-2">
             <RankedBars
               metric={metric}
               data={usage.data.byKind.map((k) => ({

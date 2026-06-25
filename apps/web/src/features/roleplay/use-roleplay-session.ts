@@ -25,6 +25,8 @@ export interface RoleplaySession {
   /** Server truth from `joined`: null before join, then whether the session
    *  already has messages. Drives the one-time start-confirm dialog. */
   hasStarted: boolean | null
+  /** True from "End & score" until the scored result arrives. */
+  ending: boolean
   ended: boolean
   scores: unknown[] | null
   feedback: string | null
@@ -46,6 +48,7 @@ export function useRoleplaySession(sessionUid: string): RoleplaySession {
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [thinking, setThinking] = useState(false)
   const [hasStarted, setHasStarted] = useState<boolean | null>(null)
+  const [ending, setEnding] = useState(false)
   const [ended, setEnded] = useState(false)
   const [scores, setScores] = useState<unknown[] | null>(null)
   const [feedback, setFeedback] = useState<string | null>(null)
@@ -102,9 +105,11 @@ export function useRoleplaySession(sessionUid: string): RoleplaySession {
       }
       case 'session_ending':
         setThinking(true)
+        setEnding(true)
         break
       case 'session_ended':
         setThinking(false)
+        setEnding(false)
         setEnded(true)
         setScores(msg.scores)
         setFeedback(msg.feedback ?? null)
@@ -113,6 +118,7 @@ export function useRoleplaySession(sessionUid: string): RoleplaySession {
       case 'error':
         setError(msg.message)
         setThinking(false)
+        setEnding(false)
         break
       case 'reconnect':
       case 'pong':
@@ -148,6 +154,9 @@ export function useRoleplaySession(sessionUid: string): RoleplaySession {
   }, [])
 
   const endSession = useCallback(() => {
+    // Optimistic: show the scoring state immediately, before the server's
+    // `session_ending` frame round-trips.
+    setEnding(true)
     channelRef.current?.send({ type: 'control', action: 'end' })
   }, [])
 
@@ -158,6 +167,7 @@ export function useRoleplaySession(sessionUid: string): RoleplaySession {
     messages,
     thinking,
     hasStarted,
+    ending,
     ended,
     scores,
     feedback,

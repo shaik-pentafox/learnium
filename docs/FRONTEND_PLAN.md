@@ -1,4 +1,4 @@
-# ALFA Learnium — Frontend Implementation Plan (React)
+# ALFA Traineon — Frontend Implementation Plan (React)
 
 Companion to [PRODUCT_PLAN.md](./PRODUCT_PLAN.md), [BACKEND_PLAN.md](./BACKEND_PLAN.md), and [DEV_STRATEGY.md](./DEV_STRATEGY.md) (authoritative). The frontend is a **React SPA** living at `apps/web` in the same **npm-workspaces** monorepo, consuming the typed contracts from `packages/contracts` and the `/api/v1` backend.
 

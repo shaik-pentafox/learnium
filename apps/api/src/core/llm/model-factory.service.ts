@@ -11,7 +11,7 @@ import { PrismaService } from '../database/prisma.service';
 import { REDIS_CLIENT } from '../redis/redis.module';
 import { decryptSecret } from '../crypto/crypto.util';
 import { DomainException } from '../errors/domain.errors';
-import { ErrorCode } from '@learnium/contracts';
+import { ErrorCode } from '@traineon/contracts';
 import type { Env } from '../config/env.schema';
 import { LlmFlowLogger } from './llm-flow.logger';
 

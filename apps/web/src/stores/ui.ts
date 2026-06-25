@@ -37,7 +37,7 @@ export const useUiStore = create<UiState>()(
       toggleSidebar: () => set({ sidebarCollapsed: !get().sidebarCollapsed }),
     }),
     {
-      name: 'learnium-ui',
+      name: 'traineon-ui',
       partialize: (state) => ({
         theme: state.theme,
         sidebarCollapsed: state.sidebarCollapsed,

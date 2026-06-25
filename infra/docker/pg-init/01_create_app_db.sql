@@ -1,1 +1,1 @@
-CREATE DATABASE learnium_app;
+CREATE DATABASE traineon_app;

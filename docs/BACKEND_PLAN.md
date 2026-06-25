@@ -1,4 +1,4 @@
-# ALFA Learnium — Backend Implementation Plan (NestJS)
+# ALFA Traineon — Backend Implementation Plan (NestJS)
 
 Companion to [PRODUCT_PLAN.md](./PRODUCT_PLAN.md). That document defines the product scope, gap analysis, and target architecture; this one defines **how the backend gets built: NestJS, the detailed stack, project structure, and delivery phases**.
 
@@ -45,7 +45,7 @@ Decision: the backend is **rebuilt in NestJS (TypeScript)** rather than evolving
 Monorepo from day one.
 
 ```
-alfa-learnium/
+alfa-traineon/
 ├── apps/
 │   ├── api/                          # NestJS backend (this plan)
 │   └── web/                          # React SPA — see FRONTEND_PLAN.md

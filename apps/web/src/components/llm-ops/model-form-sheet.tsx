@@ -29,7 +29,10 @@ import {
   type ModelInput,
 } from '@/services/llm'
 
-const CAPABILITIES = ['chat', 'vision', 'voice', 'embedding', 'reasoning', 'tools'] as const
+// Capabilities Traineon resolves models by: roleplay `conversation` + `scoring`
+// (the two logical persona roles), plus `voice` (audio agent) and generic
+// `vision` / `tools` for future use.
+const CAPABILITIES = ['conversation', 'scoring', 'voice', 'vision', 'tools'] as const
 
 interface ModelFormSheetProps {
   open: boolean

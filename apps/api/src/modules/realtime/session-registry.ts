@@ -14,6 +14,8 @@ export interface WsClient {
   modelId?: number;
   modelName?: string;
   providerType?: string;
+  /** Epoch ms of the last persisted message — used to time the next turn. */
+  lastTurnAt?: number;
 }
 
 @Injectable()

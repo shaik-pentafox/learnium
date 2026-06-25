@@ -57,7 +57,7 @@ function LoginPage() {
         <div className="mb-6 space-y-3">
           <div className="flex items-center gap-2.5">
             <Logo className="size-9 shrink-0" />
-            <h1 className="font-brand text-3xl">Learnium</h1>
+            <h1 className="font-brand text-3xl">Traineon</h1>
           </div>
           <p className="text-sm text-muted-foreground">
             Sign in to your training workspace.

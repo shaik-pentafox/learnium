@@ -1,4 +1,4 @@
-# ALFA Learnium — End-to-End Backend Implementation Plan
+# ALFA Traineon — End-to-End Backend Implementation Plan
 
 > Single authoritative, executable plan for the NestJS rebuild.
 > Synthesizes `BACKEND_PLAN.md` + `PRODUCT_PLAN.md` into one document.
@@ -8,7 +8,7 @@
 
 ## 1. Goal
 
-Rebuild ALFA Learnium backend in **NestJS 11 + TypeScript**, client-agnostic, cloud-agnostic, horizontally scalable. Legacy FastAPI app remains reference implementation until `/api/v1` reaches feature parity and cutover completes.
+Rebuild ALFA Traineon backend in **NestJS 11 + TypeScript**, client-agnostic, cloud-agnostic, horizontally scalable. Legacy FastAPI app remains reference implementation until `/api/v1` reaches feature parity and cutover completes.
 
 **Design constraints:**
 - No closed-source licensed runtime dependencies
@@ -131,7 +131,7 @@ Rebuild ALFA Learnium backend in **NestJS 11 + TypeScript**, client-agnostic, cl
 ## 5. Monorepo Structure
 
 ```
-alfa-learnium/
+alfa-traineon/
 ├── apps/
 │   ├── api/                         # NestJS backend (this plan)
 │   └── web/                         # React SPA (FRONTEND_PLAN.md)

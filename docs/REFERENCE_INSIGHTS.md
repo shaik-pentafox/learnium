@@ -1,6 +1,6 @@
 # Reference Implementation Insights
 
-Distilled strategy notes from the prior reference implementation (Python/FastAPI), captured to inform the Learnium build. **Not a spec** — [`DEV_STRATEGY.md`](./DEV_STRATEGY.md) is authoritative. Each section lists what to **adopt**, what to **avoid**, and how it maps to the current stack (NestJS · Prisma · LangChain.js + LangGraph.js · Redis/BullMQ · ClickHouse).
+Distilled strategy notes from the prior reference implementation (Python/FastAPI), captured to inform the Traineon build. **Not a spec** — [`DEV_STRATEGY.md`](./DEV_STRATEGY.md) is authoritative. Each section lists what to **adopt**, what to **avoid**, and how it maps to the current stack (NestJS · Prisma · LangChain.js + LangGraph.js · Redis/BullMQ · ClickHouse).
 
 ---
 

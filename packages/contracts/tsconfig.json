@@ -1,5 +1,5 @@
 {
-  "extends": "@learnium/tsconfig/base",
+  "extends": "@traineon/tsconfig/base",
   "compilerOptions": {
     "composite": true,
     "outDir": "./dist",

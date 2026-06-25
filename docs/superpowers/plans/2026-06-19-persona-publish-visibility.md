@@ -16,7 +16,7 @@
 - Commit format `feat(<scope>): ...` / `fix(...)` / `docs(...)`. **Never** append `Co-Authored-By` (user rule).
 - Verification per task: `npm run typecheck` (api) / `npm run typecheck` (web) must pass; backend behavior verified by the curl block in the task; web service logic by `npm run test` where a test is specified.
 - Roles: `SUPER_ADMIN`, `TRAINER`, `USER` (trainee). Owner of a persona = `Persona.createdById`.
-- API working dir: `apps/api`. Web working dir: `apps/web`. Repo root: `/Users/sivivicky/Dev/on-going/learnium`.
+- API working dir: `apps/api`. Web working dir: `apps/web`. Repo root: `/Users/sivivicky/Dev/on-going/traineon`.
 
 ## File structure
 

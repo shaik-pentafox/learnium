@@ -18,6 +18,8 @@ interface SeedCriterion {
 interface SeedPersona {
   name: string;
   description: string;
+  /** Hex accent for the persona's chat orb/avatar. Distinct per persona. */
+  color: string;
   template: PersonaTemplate;
   criteria: SeedCriterion[];
 }
@@ -28,6 +30,7 @@ const SEED_PERSONAS: SeedPersona[] = [
   {
     name: 'Double-charged Dana',
     description: 'Frustrated premium customer disputing a duplicate charge.',
+    color: '#f59e0b', // amber
     template: {
       customerName: 'Dana',
       customerProfile: 'Premium subscriber for 3 years, pays by auto-debit.',
@@ -52,6 +55,7 @@ const SEED_PERSONAS: SeedPersona[] = [
   {
     name: 'Angry Alex',
     description: 'Irate customer whose order arrived damaged; threatens to cancel.',
+    color: '#ef4444', // red
     template: {
       customerName: 'Alex',
       customerProfile: 'New customer, first order with the company.',
@@ -76,6 +80,7 @@ const SEED_PERSONAS: SeedPersona[] = [
   {
     name: 'Confused Carol',
     description: 'Non-technical customer who cannot set up a new device. Patient, low difficulty.',
+    color: '#8b5cf6', // violet
     template: {
       customerName: 'Carol',
       customerProfile: 'Retired, not comfortable with technology.',
@@ -102,6 +107,7 @@ const SEED_PERSONAS: SeedPersona[] = [
   {
     name: 'Anxious Sam',
     description: 'Worried customer who fears their account was hacked. Security-sensitive.',
+    color: '#14b8a6', // teal
     template: {
       customerName: 'Sam',
       customerProfile: 'Long-time customer, careful about security.',
@@ -142,6 +148,7 @@ async function seedPersonas(
       data: {
         name: p.name,
         description: p.description,
+        color: p.color,
         templateData: p.template as unknown as Prisma.InputJsonValue,
         systemPrompt: renderSystemPrompt(p.template),
         isPublished: publish,
@@ -173,7 +180,7 @@ interface SeedTrainer extends SeedTrainee {
 const SEED_TRAINERS: SeedTrainer[] = [
   {
     employeeId: 'TRN001',
-    email: 'trainer1@learnium.local',
+    email: 'trainer1@traineon.local',
     firstName: 'Tina',
     lastName: 'Trainer',
     username: 'trainer1',
@@ -181,6 +188,7 @@ const SEED_TRAINERS: SeedTrainer[] = [
     persona: {
       name: 'Refund Rita (Team Nimbus)',
       description: "Trainer Tina's own persona: customer chasing a late refund.",
+      color: '#fb923c', // orange
       template: {
         customerName: 'Rita',
         customerProfile: 'Customer for 1 year, paid by card.',
@@ -199,13 +207,13 @@ const SEED_TRAINERS: SeedTrainer[] = [
       ],
     },
     trainees: [
-      { employeeId: 'USR001', email: 'trainee1@learnium.local', firstName: 'Tariq', lastName: 'Trainee', username: 'trainee1', password: 'Trainee@123' },
-      { employeeId: 'USR002', email: 'trainee2@learnium.local', firstName: 'Tara', lastName: 'Trainee', username: 'trainee2', password: 'Trainee@123' },
+      { employeeId: 'USR001', email: 'trainee1@traineon.local', firstName: 'Tariq', lastName: 'Trainee', username: 'trainee1', password: 'Trainee@123' },
+      { employeeId: 'USR002', email: 'trainee2@traineon.local', firstName: 'Tara', lastName: 'Trainee', username: 'trainee2', password: 'Trainee@123' },
     ],
   },
   {
     employeeId: 'TRN002',
-    email: 'trainer2@learnium.local',
+    email: 'trainer2@traineon.local',
     firstName: 'Theo',
     lastName: 'Trainer',
     username: 'trainer2',
@@ -213,6 +221,7 @@ const SEED_TRAINERS: SeedTrainer[] = [
     persona: {
       name: 'Upgrade Uma (Team Vertex)',
       description: "Trainer Theo's own persona: customer unsure about an upgrade.",
+      color: '#3b82f6', // blue
       template: {
         customerName: 'Uma',
         customerProfile: 'Long-time customer weighing a plan upgrade.',
@@ -231,8 +240,8 @@ const SEED_TRAINERS: SeedTrainer[] = [
       ],
     },
     trainees: [
-      { employeeId: 'USR003', email: 'trainee3@learnium.local', firstName: 'Ravi', lastName: 'Learner', username: 'trainee3', password: 'Trainee@123' },
-      { employeeId: 'USR004', email: 'trainee4@learnium.local', firstName: 'Mei', lastName: 'Learner', username: 'trainee4', password: 'Trainee@123' },
+      { employeeId: 'USR003', email: 'trainee3@traineon.local', firstName: 'Ravi', lastName: 'Learner', username: 'trainee3', password: 'Trainee@123' },
+      { employeeId: 'USR004', email: 'trainee4@traineon.local', firstName: 'Mei', lastName: 'Learner', username: 'trainee4', password: 'Trainee@123' },
     ],
   },
 ];
@@ -302,7 +311,7 @@ async function main() {
     update: {},
     create: {
       employeeId: 'ADMIN001',
-      email: 'admin@learnium.local',
+      email: 'admin@traineon.local',
       firstName: 'Super',
       lastName: 'Admin',
       roleId: superAdminRole.id,

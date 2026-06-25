@@ -1,7 +1,8 @@
-import { useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { createFileRoute, redirect } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient, keepPreviousData } from "@tanstack/react-query";
 import { z } from "zod";
+import type { ColumnDef } from "@tanstack/react-table";
 import { Plus, Pencil, Trash2, Upload, Search } from "lucide-react";
 import { useAuthStore } from "@/stores/auth";
 import { queryKeys } from "@/lib/query-keys";
@@ -10,14 +11,14 @@ import { listUsers, deleteUser, userKeys, type UserListItem } from "@/services/u
 import { listRoles, roleKeys, roleLabel } from "@/services/roles";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { UserFormDialog } from "@/components/users/user-form-dialog";
 import { ImportUsersDialog } from "@/components/users/import-users-dialog";
+import { DataTable } from "@/components/shared/data-table";
+import { FacetFilter } from "@/components/shared/facet-filter";
 
 const PAGE_SIZE = 20;
 const SEARCH_DEBOUNCE_MS = 300;
-const ALL_ROLES = "all";
 
 const usersSearchSchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
@@ -81,6 +82,66 @@ function UsersPage() {
   const data = users.data;
   const totalPages = data?.totalPages ?? 1;
 
+  const columns = useMemo<ColumnDef<UserListItem>[]>(
+    () => [
+      {
+        id: "name",
+        header: "Name",
+        enableSorting: false,
+        cell: ({ row }) => (
+          <div>
+            <div className="font-medium">
+              {row.original.firstName} {row.original.lastName}
+            </div>
+            <div className="font-data text-xs text-muted-foreground">{row.original.employeeId}</div>
+          </div>
+        ),
+      },
+      {
+        accessorKey: "email",
+        header: "Email",
+        enableSorting: false,
+        cell: ({ getValue }) => (
+          <span className="text-muted-foreground">{getValue() as string}</span>
+        ),
+      },
+      {
+        id: "role",
+        header: "Role",
+        enableSorting: false,
+        cell: ({ row }) => <RolePill name={row.original.role.name} />,
+      },
+      {
+        id: "actions",
+        header: "",
+        enableSorting: false,
+        cell: ({ row }) => (
+          <div className="flex items-center justify-end gap-1">
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-7"
+              onClick={() => setEditing({ user: row.original })}
+              aria-label={`Edit ${row.original.firstName} ${row.original.lastName}`}
+            >
+              <Pencil className="size-3.5" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-7 text-muted-foreground hover:text-destructive"
+              onClick={() => setDeleting(row.original)}
+              aria-label={`Delete ${row.original.firstName} ${row.original.lastName}`}
+            >
+              <Trash2 className="size-3.5" />
+            </Button>
+          </div>
+        ),
+      },
+    ],
+    [],
+  );
+
   return (
     <div className="space-y-6">
       <header className="flex flex-wrap items-start justify-between gap-4">
@@ -102,99 +163,65 @@ function UsersPage() {
         </div>
       </header>
 
-      {/* Filters */}
-      <div className="flex flex-wrap items-center gap-3">
-        <div className="relative flex-1 sm:max-w-xs">
-          <Search className="absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
-          <Input value={qInput} onChange={(e) => onSearchChange(e.target.value)} placeholder="Search name, email, ID…" className="pl-9" />
-        </div>
-        {isSuperAdmin && (
-          <Select
-            value={search.roleId != null ? String(search.roleId) : ALL_ROLES}
-            onValueChange={(v) =>
-              patchSearch({
-                roleId: v === ALL_ROLES ? undefined : Number(v),
-                page: 1,
-              })
-            }
-          >
-            <SelectTrigger className="w-40">
-              <SelectValue placeholder="All roles" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value={ALL_ROLES}>All roles</SelectItem>
-              {roles.data?.map((r) => (
-                <SelectItem key={r.id} value={String(r.id)}>
-                  {roleLabel(r.name)}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        )}
-      </div>
-
       {/* Table */}
-      <div className="overflow-x-auto rounded-lg border border-border bg-surface">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="border-b border-border text-left text-xs text-muted-foreground">
-              <Th>Name</Th>
-              <Th>Email</Th>
-              <Th>Role</Th>
-              <Th className="text-right">Actions</Th>
-            </tr>
-          </thead>
-          <tbody>
-            {users.isPending && (
-              <tr>
-                <td colSpan={4} className="px-4 py-6">
-                  <div className="space-y-3">
-                    <div className="h-4 w-full animate-pulse rounded bg-muted" />
-                    <div className="h-4 w-5/6 animate-pulse rounded bg-muted" />
-                    <div className="h-4 w-4/6 animate-pulse rounded bg-muted" />
-                  </div>
-                </td>
-              </tr>
-            )}
-            {users.isError && (
-              <tr>
-                <td colSpan={4} className="px-4 py-6 text-sm">
-                  <span className="text-destructive">Couldn’t load users.</span>{" "}
-                  <button type="button" onClick={() => users.refetch()} className="text-primary hover:underline">
-                    Retry
-                  </button>
-                </td>
-              </tr>
-            )}
-            {data?.users.map((u) => (
-              <UserRow key={u.id} user={u} onEdit={() => setEditing({ user: u })} onDelete={() => setDeleting(u)} />
-            ))}
-            {data && data.users.length === 0 && (
-              <tr>
-                <td colSpan={4} className="px-4 py-6 text-sm text-muted-foreground">
-                  {search.q || search.roleId ? "No users match your filters." : "No users yet."}
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-
-      {/* Pagination */}
-      {data && data.total > 0 && (
-        <div className="flex items-center justify-between text-sm text-muted-foreground">
-          <span>
-            {data.total} {data.total === 1 ? "user" : "users"} · page {data.page} of {totalPages}
-          </span>
-          <div className="flex gap-2">
-            <Button variant="secondary" size="sm" disabled={data.page <= 1} onClick={() => patchSearch({ page: data.page - 1 })}>
-              Previous
-            </Button>
-            <Button variant="secondary" size="sm" disabled={data.page >= totalPages} onClick={() => patchSearch({ page: data.page + 1 })}>
-              Next
-            </Button>
-          </div>
+      {users.isError ? (
+        <div className="rounded-lg border border-border bg-surface p-4 text-sm">
+          <span className="text-destructive">Couldn’t load users.</span>{" "}
+          <button type="button" onClick={() => users.refetch()} className="text-primary hover:underline">
+            Retry
+          </button>
         </div>
+      ) : (
+        <DataTable
+          columns={columns}
+          data={data?.users ?? []}
+          isLoading={users.isPending}
+          emptyMessage={search.q || search.roleId ? "No users match your filters." : "No users yet."}
+          pageSizeOptions={[PAGE_SIZE]}
+          toolbar={
+            <>
+              <div className="relative">
+                <Search className="pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  value={qInput}
+                  onChange={(e) => onSearchChange(e.target.value)}
+                  placeholder="Search name, email, ID…"
+                  className="h-8 w-56 pl-7 text-xs"
+                />
+              </div>
+              {isSuperAdmin && (
+                <FacetFilter
+                  title="Role"
+                  single
+                  options={(roles.data ?? []).map((r) => ({
+                    label: roleLabel(r.name),
+                    value: String(r.id),
+                  }))}
+                  selected={search.roleId != null ? [String(search.roleId)] : []}
+                  onChange={(vals) =>
+                    patchSearch({
+                      roleId: vals[0] ? Number(vals[0]) : undefined,
+                      page: 1,
+                    })
+                  }
+                />
+              )}
+            </>
+          }
+          manualPagination={{
+            pageIndex: search.page - 1,
+            pageSize: PAGE_SIZE,
+            pageCount: totalPages,
+            rowCount: data?.total ?? 0,
+            onPaginationChange: (updater) => {
+              const next =
+                typeof updater === "function"
+                  ? updater({ pageIndex: search.page - 1, pageSize: PAGE_SIZE })
+                  : updater;
+              patchSearch({ page: next.pageIndex + 1 });
+            },
+          }}
+        />
       )}
 
       <UserFormDialog
@@ -212,39 +239,6 @@ function UsersPage() {
       />
       {isSuperAdmin && <ImportUsersDialog open={importing} onOpenChange={setImporting} />}
     </div>
-  );
-}
-
-interface UserRowProps {
-  user: UserListItem;
-  onEdit: () => void;
-  onDelete: () => void;
-}
-
-function UserRow({ user, onEdit, onDelete }: UserRowProps) {
-  return (
-    <tr className="border-b border-border last:border-0">
-      <td className="px-4 py-3">
-        <div className="font-medium">
-          {user.firstName} {user.lastName}
-        </div>
-        <div className="font-data text-xs text-muted-foreground">{user.employeeId}</div>
-      </td>
-      <td className="px-4 py-3 text-muted-foreground">{user.email}</td>
-      <td className="px-4 py-3">
-        <RolePill name={user.role.name} />
-      </td>
-      <td className="px-4 py-3">
-        <div className="flex items-center justify-end gap-1">
-          <Button variant="ghost" size="icon" className="size-7" onClick={onEdit} aria-label={`Edit ${user.firstName} ${user.lastName}`}>
-            <Pencil className="size-3.5" />
-          </Button>
-          <Button variant="ghost" size="icon" className="size-7 text-muted-foreground hover:text-destructive" onClick={onDelete} aria-label={`Delete ${user.firstName} ${user.lastName}`}>
-            <Trash2 className="size-3.5" />
-          </Button>
-        </div>
-      </td>
-    </tr>
   );
 }
 
@@ -284,6 +278,3 @@ function DeleteUserDialog({ user, onOpenChange }: { user: UserListItem | null; o
   );
 }
 
-function Th({ children, className = "" }: { children: React.ReactNode; className?: string }) {
-  return <th className={`px-4 py-2.5 font-medium ${className}`}>{children}</th>;
-}

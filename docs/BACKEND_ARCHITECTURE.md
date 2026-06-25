@@ -8,9 +8,9 @@
 
 ---
 
-## 1. What Learnium is
+## 1. What Traineon is
 
-Learnium is an **AI roleplay training platform**. A trainer authors a *persona* (e.g. "angry
+Traineon is an **AI roleplay training platform**. A trainer authors a *persona* (e.g. "angry
 customer", "reluctant lead") as a system prompt plus a scoring rubric. A trainee opens a live
 chat session and roleplays against that persona; an LLM stays in character and drives the
 conversation. When the conversation ends, a second LLM call scores the trainee's performance
@@ -102,7 +102,7 @@ re-architecture. The shape of the agent (single-node graph, sentinel-based termi
 prompt wrapper, holistic one-call scoring, DB-as-source-of-truth) was **kept**; the operational
 flaws were **fixed**.
 
-| Concern | Old reference (Python/FastAPI) | Learnium (NestJS/TS) — current |
+| Concern | Old reference (Python/FastAPI) | Traineon (NestJS/TS) — current |
 |---|---|---|
 | Agent graph | Single-node LangGraph `START→chatbot→END` | **Same shape**, ported to LangGraph.js |
 | Conversation memory | In-process `MemorySaver`, seeded per connect; **lost on restart**, unbounded, per-replica | **`PostgresSaver` checkpointer**, `thread_id = session.uid`; durable + replica-safe |

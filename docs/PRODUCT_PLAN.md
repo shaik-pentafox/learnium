@@ -1,4 +1,4 @@
-# ALFA Learnium — Product & Architecture Plan (v2)
+# ALFA Traineon — Product & Architecture Plan (v2)
 
 **Goal:** turn the existing backend into a production-grade, cloud-agnostic, open-source-first AI roleplay training platform, with a clean, professional web frontend.
 

@@ -126,6 +126,7 @@ export class UsageService {
     const groupArgs = {
       where,
       _sum: { totalTokens: true, costUsd: true },
+      _avg: { latencyMs: true },
       _count: true,
       orderBy: { _sum: { costUsd: 'desc' } },
     } as const;
@@ -165,13 +166,60 @@ export class UsageService {
         totalTokens: agg._sum.totalTokens ?? 0,
         costUsd: Number((agg._sum.costUsd ?? 0).toFixed(4)),
       },
-      byModel: byModel.map((r) => ({ ...bucket(r.modelName, r), modelName: r.modelName })),
+      byModel: byModel.map((r) => ({
+        ...bucket(r.modelName, r),
+        modelName: r.modelName,
+        avgLatencyMs: r._avg.latencyMs != null ? Math.round(r._avg.latencyMs) : null,
+      })),
       byProvider: byProvider.map((r) => bucket(r.providerType ?? 'unknown', r)),
       byKind: byKind.map((r) => bucket(r.kind, r)),
       series,
       seriesByModel,
       seriesByProvider,
       recent,
+    };
+  }
+
+  /** Paginated, filterable recent-call log. `kinds`/`models` are OR-within /
+   *  AND-across filters. `facets` lists every distinct kind/model available so
+   *  the UI can populate its filter menus regardless of the active filter. */
+  async calls(query: {
+    page: number;
+    limit: number;
+    kind: string[];
+    model: string[];
+  }) {
+    const where: Prisma.LlmUsageWhereInput = {
+      ...(query.kind.length ? { kind: { in: query.kind } } : {}),
+      ...(query.model.length ? { modelName: { in: query.model } } : {}),
+    };
+    const skip = (query.page - 1) * query.limit;
+
+    const [rows, total, kinds, models] = await Promise.all([
+      this.prisma.llmUsage.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take: query.limit,
+      }),
+      this.prisma.llmUsage.count({ where }),
+      this.prisma.llmUsage.groupBy({ by: ['kind'], orderBy: { kind: 'asc' } }),
+      this.prisma.llmUsage.groupBy({
+        by: ['modelName'],
+        orderBy: { modelName: 'asc' },
+      }),
+    ]);
+
+    return {
+      rows,
+      total,
+      page: query.page,
+      limit: query.limit,
+      totalPages: Math.max(1, Math.ceil(total / query.limit)),
+      facets: {
+        kinds: kinds.map((k) => k.kind),
+        models: models.map((m) => m.modelName),
+      },
     };
   }
 

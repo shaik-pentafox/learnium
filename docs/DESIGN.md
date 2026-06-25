@@ -1,4 +1,4 @@
-# Learnium — Design System (`DESIGN.md`)
+# Traineon — Design System (`DESIGN.md`)
 
 > **Status:** authoritative design reference for `apps/web`. Codifies the direction chosen in
 > [`FRONTEND_PLAN.md §3`](./FRONTEND_PLAN.md) — the **"Linear" archetype: Zinc neutral + Indigo accent**,
@@ -16,7 +16,7 @@
 
 ## Overview
 
-Learnium is an **authenticated AI-roleplay training platform** — trainees practice sales/support
+Traineon is an **authenticated AI-roleplay training platform** — trainees practice sales/support
 conversations against AI personas, trainers build those personas and watch their cohort, admins run
 the org and the LLM fleet. The surface is a **dense-but-breathable internal tool**, not a marketing
 page. That single fact drives every decision: structure over decoration, restraint over flash,

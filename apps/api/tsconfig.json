@@ -1,5 +1,5 @@
 {
-  "extends": "@learnium/tsconfig/nestjs",
+  "extends": "@traineon/tsconfig/nestjs",
   "compilerOptions": {
     "outDir": "./dist",
     "rootDir": "./src"

@@ -8,7 +8,7 @@ import {
 } from '@nestjs/common';
 import { FastifyReply, FastifyRequest } from 'fastify';
 import { Prisma } from '@prisma/client';
-import { ErrorCode } from '@learnium/contracts';
+import { ErrorCode } from '@traineon/contracts';
 import { DomainException } from './domain.errors';
 
 @Catch()

@@ -51,9 +51,9 @@ const NAV: NavItem[] = [
   },
   {
     label: 'Report',
-    to: '/dashboard',
+    to: '/report',
     icon: BarChart3,
-    roles: ['SUPER_ADMIN', 'TRAINER'],
+    roles: ALL,
   },
   { label: 'LLM Ops', to: '/llm-ops', icon: Cpu, roles: ['SUPER_ADMIN'] },
 ]
@@ -107,7 +107,7 @@ export function AppSidebar() {
                 {/* Override the sidebar button's [&>svg]:size-4 clamp. */}
                 <Logo className="size-7! shrink-0" />
                 <span className="font-brand text-xl group-data-[collapsible=icon]:hidden">
-                  Learnium
+                  Traineon
                 </span>
               </Link>
             </SidebarMenuButton>

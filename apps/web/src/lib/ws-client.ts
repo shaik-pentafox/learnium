@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import type { ClientMessage } from '@learnium/contracts'
+import type { ClientMessage } from '@traineon/contracts'
 
 // Server → client frames. Mirrors packages/contracts `ServerMessageSchema`,
 // PLUS the `joined` handshake the gateway sends but the contract omits (drift).

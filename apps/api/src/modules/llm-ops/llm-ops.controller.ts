@@ -19,6 +19,7 @@ import {
   CreateModelDtoSchema,
   UpdateModelDtoSchema,
   ModelQueryDtoSchema,
+  UsageCallsQueryDtoSchema,
 } from './dto/llm-ops.dto';
 
 @Controller('llm')
@@ -44,6 +45,14 @@ export class LlmOpsController {
       ...(from ? { from } : {}),
       ...(to ? { to } : {}),
     });
+  }
+
+  @Get('usage/calls')
+  @Permissions('llmops:read')
+  usageCalls(@Query() query: unknown) {
+    const result = UsageCallsQueryDtoSchema.safeParse(query);
+    if (!result.success) throw new ValidationException('Invalid query', result.error.issues);
+    return this.usage.calls(result.data);
   }
 
   // ── Providers ──────────────────────────────────────────────────────────────

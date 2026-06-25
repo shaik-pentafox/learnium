@@ -27,7 +27,7 @@ export const EnvSchema = z.object({
   // Object storage
   STORAGE_PROVIDER: z.enum(['s3', 'azure']).default('s3'),
   S3_ENDPOINT: z.string().optional(),
-  S3_BUCKET: z.string().default('learnium-content'),
+  S3_BUCKET: z.string().default('traineon-content'),
   S3_REGION: z.string().default('us-east-1'),
   S3_ACCESS_KEY_ID: z.string().optional(),
   S3_SECRET_ACCESS_KEY: z.string().optional(),
@@ -36,7 +36,7 @@ export const EnvSchema = z.object({
 
   // ClickHouse
   CLICKHOUSE_URL: z.string().url(),
-  CLICKHOUSE_DATABASE: z.string().default('learnium'),
+  CLICKHOUSE_DATABASE: z.string().default('traineon'),
   CLICKHOUSE_USERNAME: z.string().default('default'),
   CLICKHOUSE_PASSWORD: z.string().default(''),
 

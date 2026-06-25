@@ -250,6 +250,9 @@ model ChatMessage {
   role       String   // user | assistant
   content    String
   tokenCount Int?
+  /** Per-message timing (ms). assistant = LLM generation time; user = trainee
+   *  response/think time since the previous message. */
+  latencyMs  Int?
   createdAt  DateTime @default(now())
 
   @@index([sessionId])

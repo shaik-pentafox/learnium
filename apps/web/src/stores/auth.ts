@@ -32,7 +32,7 @@ export interface Tokens {
 // localStorage holds only the durable refresh token + display name (per the
 // chosen storage strategy — the backend returns the refresh token in the body,
 // not an httpOnly cookie). The access token stays in memory.
-const STORAGE_KEY = 'learnium-auth'
+const STORAGE_KEY = 'traineon-auth'
 
 interface PersistedAuth {
   refreshToken: string

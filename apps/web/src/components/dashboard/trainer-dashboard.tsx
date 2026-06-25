@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react'
 import { Link } from '@tanstack/react-router'
-import { Users, MessagesSquare, CheckCircle2, Target } from 'lucide-react'
+import { Users, MessagesSquare, CheckCircle2, Target, Timer } from 'lucide-react'
 import type {
   TrainerSummary,
   TrainerTraineeRow,
@@ -15,7 +15,7 @@ import { XAxis } from '@/components/charts/x-axis'
 import { YAxis } from '@/components/charts/y-axis'
 import { ChartTooltip } from '@/components/charts/tooltip'
 import { chartCssVars } from '@/components/charts/chart-context'
-import { StatCard, Tile, StatusBadge, scoreLabel } from './primitives'
+import { StatCard, Tile, StatusBadge, scoreLabel, fmtMs, ViewAll } from './primitives'
 import { StatusDonut } from './dashboard-charts'
 
 function scoreBarColor(pct: number | null): string {
@@ -26,6 +26,7 @@ function scoreBarColor(pct: number | null): string {
 }
 
 const LOW_SCORE_PCT = 60
+const PREVIEW = 5
 const INACTIVE_DAYS = 7
 const DAY_MS = 86_400_000
 
@@ -100,7 +101,7 @@ export function TrainerDashboard({ data }: { data: TrainerSummary }) {
   const hasActivity = windowed.some((p) => p.sessions > 0)
 
   return (
-    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-5">
       <StatCard label="Trainees" value={totals.trainees} icon={<Users />} />
       <StatCard label="Sessions" value={totals.sessions} icon={<MessagesSquare />} />
       <StatCard
@@ -114,6 +115,12 @@ export function TrainerDashboard({ data }: { data: TrainerSummary }) {
         }
       />
       <StatCard label="Team avg score" value={scoreLabel(totals.avgScorePct)} icon={<Target />} />
+      <StatCard
+        label="Trainees avg reply"
+        value={fmtMs(totals.avgResponseMs)}
+        icon={<Timer />}
+        hint="team response speed"
+      />
 
       <Tile
         title="Activity"
@@ -129,7 +136,8 @@ export function TrainerDashboard({ data }: { data: TrainerSummary }) {
           <AreaChart
             key={actMetric}
             data={chartData}
-            aspectRatio="4 / 1"
+            aspectRatio="auto"
+            className="min-h-64 flex-1"
             margin={{ top: 16, right: 16, bottom: 44, left: 44 }}
           >
             <Grid horizontal />
@@ -153,23 +161,33 @@ export function TrainerDashboard({ data }: { data: TrainerSummary }) {
         )}
       </Tile>
 
-      <Tile title="Session outcomes" className="sm:col-span-2 xl:col-span-1">
+      <Tile title="Session outcomes" className="sm:col-span-2 xl:col-span-2">
         <div className="flex flex-1 items-center justify-center">
-          <StatusDonut completed={totals.completed} abandoned={totals.abandoned} />
+          <StatusDonut
+            completed={totals.completed}
+            abandoned={totals.abandoned}
+            ongoing={Math.max(
+              0,
+              totals.sessions - totals.completed - totals.abandoned,
+            )}
+          />
         </div>
       </Tile>
 
       <Tile
         title="Trainees"
-        className="sm:col-span-2"
+        className="sm:col-span-2 xl:col-span-2"
         action={
-          <Link
-            to="/users"
-            search={{ page: 1 }}
-            className={buttonVariants({ variant: 'secondary', size: 'sm' })}
-          >
-            Manage
-          </Link>
+          <div className="flex items-center gap-3">
+            <ViewAll tab="trainees" />
+            <Link
+              to="/users"
+              search={{ page: 1 }}
+              className={buttonVariants({ variant: 'secondary', size: 'sm' })}
+            >
+              Manage
+            </Link>
+          </div>
         }
       >
         {trainees.length === 0 ? (
@@ -177,31 +195,39 @@ export function TrainerDashboard({ data }: { data: TrainerSummary }) {
             No trainees yet. Add team members from the Users tab.
           </p>
         ) : (
-          <ul className="max-h-72 divide-y divide-border overflow-y-auto scrollbar-hide">
-            {trainees.map((t) => (
+          <ul className="divide-y divide-border">
+            {trainees.slice(0, PREVIEW).map((t) => (
               <TraineeRow key={t.id} row={t} isTop={t.id === topId} />
             ))}
           </ul>
         )}
       </Tile>
 
-      <Tile title="By scenario" className="sm:col-span-2">
+      <Tile
+        title="Personas"
+        className="sm:col-span-2 xl:col-span-3"
+        action={<ViewAll tab="scenarios" />}
+      >
         {byPersona.length === 0 ? (
           <p className="py-8 text-center text-sm text-muted-foreground">No sessions yet.</p>
         ) : (
-          <ul className="max-h-72 divide-y divide-border overflow-y-auto scrollbar-hide">
-            {byPersona.map((p) => (
+          <ul className="divide-y divide-border">
+            {byPersona.slice(0, PREVIEW).map((p) => (
               <PersonaRow key={p.personaName} row={p} />
             ))}
           </ul>
         )}
       </Tile>
 
-      <Tile title="Recent sessions" className="sm:col-span-2">
+      <Tile
+        title="Recent sessions"
+        className="sm:col-span-2 xl:col-span-3"
+        action={<ViewAll tab="sessions" />}
+      >
         {recent.length === 0 ? (
           <p className="py-8 text-center text-sm text-muted-foreground">No sessions yet.</p>
         ) : (
-          <ul className="max-h-72 divide-y divide-border overflow-y-auto scrollbar-hide">
+          <ul className="divide-y divide-border">
             {recent.map((r) => (
               <RecentRow key={r.uid} row={r} />
             ))}
@@ -209,7 +235,7 @@ export function TrainerDashboard({ data }: { data: TrainerSummary }) {
         )}
       </Tile>
 
-      <Tile title="Personas" className="self-start sm:col-span-2">
+      <Tile title="Persona library" className="self-start sm:col-span-2 xl:col-span-2">
         <div className="flex items-center justify-around gap-4 py-2">
           <PersonaStat label="Total" value={personas.total} />
           <span className="h-10 w-px bg-border" />

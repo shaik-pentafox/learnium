@@ -1,5 +1,5 @@
 import { HttpException, HttpStatus } from '@nestjs/common';
-import { ErrorCode } from '@learnium/contracts';
+import { ErrorCode } from '@traineon/contracts';
 
 export class DomainException extends HttpException {
   constructor(

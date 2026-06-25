@@ -67,9 +67,13 @@ export class SessionsService {
     const { page, limit, personaId, userId, status, from, to } = query;
     const skip = (page - 1) * limit;
 
+    // Role scoping: trainees see only their own; trainers see their supervised
+    // trainees' sessions; super admins see everything. An explicit `userId`
+    // filter narrows further (clamped to the trainer's own trainees).
+    const userScope = await this.userScope(actorId, role, userId);
+
     const where: Prisma.SessionWhereInput = {
-      ...(role === 'USER' ? { userId: actorId } : {}),
-      ...(userId !== undefined ? { userId } : {}),
+      ...(userScope !== undefined ? { userId: userScope } : {}),
       ...(personaId !== undefined ? { personaId } : {}),
       ...(status !== undefined ? { status } : {}),
       ...(from !== undefined || to !== undefined
@@ -100,6 +104,30 @@ export class SessionsService {
     return { sessions, total, page, limit, totalPages: Math.ceil(total / limit) };
   }
 
+  /** Resolve the `userId` filter for a session list given the actor's role.
+   *  Returns a Prisma scalar/`in` filter, or `undefined` for "no restriction"
+   *  (super admin, all users). Trainers are confined to supervised trainees. */
+  private async userScope(
+    actorId: number,
+    role: string,
+    requestedUserId?: number,
+  ): Promise<number | Prisma.IntFilter | undefined> {
+    if (role === 'USER') return actorId;
+    if (role === 'TRAINER') {
+      const trainees = await this.prisma.user.findMany({
+        where: { supervisorId: actorId, isDeleted: false },
+        select: { id: true },
+      });
+      const ids = trainees.map((t) => t.id);
+      if (requestedUserId !== undefined) {
+        return ids.includes(requestedUserId) ? requestedUserId : { in: [] };
+      }
+      return { in: ids };
+    }
+    // SUPER_ADMIN: optional narrowing only.
+    return requestedUserId !== undefined ? requestedUserId : undefined;
+  }
+
   async findByUid(uid: string, actorId: number, role: string) {
     const session = await this.prisma.session.findUnique({
       where: { uid },
@@ -111,7 +139,30 @@ export class SessionsService {
     });
     if (!session) throw new NotFoundException('Session', uid);
     if (role === 'USER' && session.userId !== actorId) throw new ForbiddenException();
-    return session;
+    return { ...session, timing: await this.sessionTiming(session.id, session.startedAt, session.endedAt) };
+  }
+
+  /** Derived timing for a session: total duration + avg/turn split by who took
+   *  the time (trainee response vs LLM generation). Feeds user + model perf. */
+  private async sessionTiming(sessionId: number, startedAt: Date, endedAt: Date | null) {
+    const messages = await this.prisma.chatMessage.findMany({
+      where: { sessionId },
+      select: { role: true, latencyMs: true },
+    });
+    const avg = (vals: number[]) =>
+      vals.length ? Math.round(vals.reduce((a, b) => a + b, 0) / vals.length) : null;
+    const userMs = messages
+      .filter((m) => m.role === 'user' && m.latencyMs != null)
+      .map((m) => m.latencyMs as number);
+    const llmMs = messages
+      .filter((m) => m.role === 'assistant' && m.latencyMs != null)
+      .map((m) => m.latencyMs as number);
+    return {
+      durationMs: endedAt ? endedAt.getTime() - startedAt.getTime() : null,
+      turns: messages.length,
+      avgUserResponseMs: avg(userMs),
+      avgLlmLatencyMs: avg(llmMs),
+    };
   }
 
   async getMessages(uid: string, query: MessageQueryDto, actorId: number, role: string) {

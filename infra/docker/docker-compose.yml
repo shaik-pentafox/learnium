@@ -5,16 +5,16 @@ services:
     image: pgvector/pgvector:pg16
     restart: unless-stopped
     environment:
-      POSTGRES_USER: learnium
-      POSTGRES_PASSWORD: learnium
-      POSTGRES_DB: learnium
+      POSTGRES_USER: traineon
+      POSTGRES_PASSWORD: traineon
+      POSTGRES_DB: traineon
     ports:
-      - '5432:5432'
+      - '5433:5432'   # host 5433 → avoid clash with a local Postgres on 5432
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./pg-init:/docker-entrypoint-initdb.d  # creates learnium_app on first boot
+      - ./pg-init:/docker-entrypoint-initdb.d  # creates traineon_app on first boot
     healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -U learnium']
+      test: ['CMD-SHELL', 'pg_isready -U traineon']
       interval: 5s
       timeout: 5s
       retries: 10
@@ -41,7 +41,7 @@ services:
     volumes:
       - clickhouse_data:/var/lib/clickhouse
     environment:
-      CLICKHOUSE_DB: learnium
+      CLICKHOUSE_DB: traineon
       CLICKHOUSE_USER: default
       CLICKHOUSE_PASSWORD: ''
     healthcheck:
@@ -55,8 +55,8 @@ services:
     restart: unless-stopped
     command: server /data --console-address ":9001"
     environment:
-      MINIO_ROOT_USER: learnium
-      MINIO_ROOT_PASSWORD: learnium_secret
+      MINIO_ROOT_USER: traineon
+      MINIO_ROOT_PASSWORD: traineon_secret
     ports:
       - '9002:9000'   # S3 API (offset to avoid conflict with clickhouse native)
       - '9001:9001'   # MinIO console
@@ -77,19 +77,19 @@ services:
       NODE_ENV: development
       APP_ROLE: api
       PORT: 3000
-      DATABASE_URL: postgresql://learnium:learnium@postgres:5432/learnium
+      DATABASE_URL: postgresql://traineon:traineon@postgres:5432/traineon
       REDIS_URL: redis://redis:6379
       CLICKHOUSE_URL: http://clickhouse:8123
-      CLICKHOUSE_DATABASE: learnium
+      CLICKHOUSE_DATABASE: traineon
       CLICKHOUSE_USERNAME: default
       CLICKHOUSE_PASSWORD: ''
       CREDENTIAL_ENCRYPTION_KEY: dev-credential-encryption-key-min-32
       STORAGE_PROVIDER: s3
       S3_ENDPOINT: http://minio:9000
-      S3_BUCKET: learnium-content
+      S3_BUCKET: traineon-content
       S3_REGION: us-east-1
-      S3_ACCESS_KEY_ID: learnium
-      S3_SECRET_ACCESS_KEY: learnium_secret
+      S3_ACCESS_KEY_ID: traineon
+      S3_SECRET_ACCESS_KEY: traineon_secret
       JWT_ACCESS_SECRET: dev-access-secret-min-32-chars-here
       JWT_REFRESH_SECRET: dev-refresh-secret-min-32-chars-here
       CORS_ORIGINS: http://localhost:5173

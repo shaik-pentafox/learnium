@@ -161,6 +161,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     wsClient.modelId = resolvedModelId;
     wsClient.modelName = resolvedModelName;
     wsClient.providerType = resolvedProviderType;
+    wsClient.lastTurnAt = Date.now();
 
     // hasStarted lets the client show the start-confirm dialog only on a genuine
     // first join — never again after a reconnect, where messages already exist.
@@ -278,9 +279,17 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     });
 
     if (opts.persistUser) {
+      // Trainee response/think time: gap since the persona's last message.
+      const responseMs = wsClient.lastTurnAt ? Date.now() - wsClient.lastTurnAt : null;
       await this.prisma.chatMessage.create({
-        data: { sessionId: wsClient.sessionDbId!, role: 'user', content },
+        data: {
+          sessionId: wsClient.sessionDbId!,
+          role: 'user',
+          content,
+          latencyMs: responseMs,
+        },
       });
+      wsClient.lastTurnAt = Date.now();
     }
 
     // The checkpointer (thread_id = session uid) carries prior turns, so we append
@@ -369,8 +378,14 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     });
 
     const saved = await this.prisma.chatMessage.create({
-      data: { sessionId: wsClient.sessionDbId!, role: 'assistant', content: fullContent.trim() },
+      data: {
+        sessionId: wsClient.sessionDbId!,
+        role: 'assistant',
+        content: fullContent.trim(),
+        latencyMs: Date.now() - startedAt,
+      },
     });
+    wsClient.lastTurnAt = Date.now();
 
     this.send(client, {
       type: 'message_done',

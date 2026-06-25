@@ -28,6 +28,8 @@ export interface TraineeSummary {
     abandoned: number
     avgScorePct: number | null
     bestScorePct: number | null
+    avgResponseMs: number | null
+    avgLlmLatencyMs: number | null
   }
   byPersona: TraineePersonaStat[]
   series: TraineeDayPoint[]
@@ -72,6 +74,8 @@ export interface TrainerSummary {
     completed: number
     abandoned: number
     avgScorePct: number | null
+    avgResponseMs: number | null
+    avgLlmLatencyMs: number | null
   }
   trainees: TrainerTraineeRow[]
   byPersona: TrainerPersonaStat[]
@@ -91,6 +95,8 @@ export interface AdminSummary {
     publishedPersonas: number
     sessions: number
     completed: number
+    avgResponseMs: number | null
+    avgLlmLatencyMs: number | null
   }
 }
 
@@ -101,6 +107,69 @@ export async function getDashboardSummary(): Promise<DashboardSummary> {
   return apiGet<DashboardSummary>('/dashboard/summary')
 }
 
+// ── Admin report (paginated rollups) ─────────────────────────────────────────
+
+export interface Paginated<T> {
+  rows: T[]
+  total: number
+  page: number
+  limit: number
+  totalPages: number
+}
+
+export interface TrainerReportRow {
+  id: number
+  name: string
+  email: string
+  trainees: number
+  sessions: number
+  completed: number
+  avgScorePct: number | null
+}
+
+export interface PersonaReportRow {
+  id: number
+  name: string
+  owner: string
+  published: boolean
+  sessions: number
+  avgScorePct: number | null
+}
+
+export interface ReportPageParams {
+  page?: number
+  limit?: number
+  q?: string
+  published?: boolean
+}
+
+function reportParams(p: ReportPageParams) {
+  return {
+    ...(p.page ? { page: p.page } : {}),
+    ...(p.limit ? { limit: p.limit } : {}),
+    ...(p.q ? { q: p.q } : {}),
+    ...(p.published !== undefined ? { published: p.published } : {}),
+  }
+}
+
+/** GET /dashboard/report/trainers — admin per-trainer rollup. */
+export async function reportTrainers(
+  params: ReportPageParams,
+): Promise<Paginated<TrainerReportRow>> {
+  return apiGet('/dashboard/report/trainers', { params: reportParams(params) })
+}
+
+/** GET /dashboard/report/personas — admin per-persona rollup. */
+export async function reportPersonas(
+  params: ReportPageParams,
+): Promise<Paginated<PersonaReportRow>> {
+  return apiGet('/dashboard/report/personas', { params: reportParams(params) })
+}
+
 export const dashboardKeys = {
   summary: (userId?: number) => ['dashboard', 'summary', userId] as const,
+  reportTrainers: (params: ReportPageParams) =>
+    ['dashboard', 'report', 'trainers', params] as const,
+  reportPersonas: (params: ReportPageParams) =>
+    ['dashboard', 'report', 'personas', params] as const,
 }
