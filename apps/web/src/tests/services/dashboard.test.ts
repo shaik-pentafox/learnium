@@ -32,7 +32,7 @@ describe('getDashboardSummary', () => {
     respondWith({
       firstName: 'Jane',
       role: 'USER',
-      totals: { sessions: 6, completed: 5, abandoned: 1, avgScorePct: 78, bestScorePct: 92 },
+      totals: { sessions: 6, completed: 5, abandoned: 1, avgScorePct: 78, bestScorePct: 92, avgResponseMs: 7200, avgLlmLatencyMs: 1900 },
       byPersona: [{ personaName: 'Dana', sessions: 3, avgScorePct: 82 }],
       series: [{ date: '2026-06-01', sessions: 2, avgScorePct: 78 }],
       recent: [{ uid: 's1', personaName: 'Dana', status: 'COMPLETED', scorePct: 82 }],
@@ -49,7 +49,7 @@ describe('getDashboardSummary', () => {
     respondWith({
       firstName: 'Theo',
       role: 'TRAINER',
-      totals: { trainees: 2, sessions: 10, completed: 7, abandoned: 1, avgScorePct: 70 },
+      totals: { trainees: 2, sessions: 10, completed: 7, abandoned: 1, avgScorePct: 70, avgResponseMs: 8400, avgLlmLatencyMs: 2100 },
       trainees: [
         { id: 1, name: 'Jane', sessions: 5, completed: 4, avgScorePct: 81, lastActiveAt: null },
       ],
@@ -80,6 +80,8 @@ describe('getDashboardSummary', () => {
         publishedPersonas: 6,
         sessions: 140,
         completed: 118,
+        avgResponseMs: 9100,
+        avgLlmLatencyMs: 2300,
       },
     })
     const result = await getDashboardSummary()
