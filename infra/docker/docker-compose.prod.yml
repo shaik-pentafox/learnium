@@ -6,7 +6,8 @@
 #
 services:
   postgres:
-    image: pgvector/pgvector:pg16
+    image: postgres:16
+    container_name: traineon-db
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
@@ -23,6 +24,7 @@ services:
 
   redis:
     image: redis:7-alpine
+    container_name: traineon-redis
     restart: unless-stopped
     volumes:
       - redis_data:/data
@@ -34,6 +36,7 @@ services:
 
   clickhouse:
     image: clickhouse/clickhouse-server:24
+    container_name: traineon-clickhouse
     restart: unless-stopped
     environment:
       CLICKHOUSE_DB: ${CLICKHOUSE_DB}
@@ -51,6 +54,7 @@ services:
     build:
       context: ../../
       dockerfile: infra/docker/Dockerfile
+    container_name: traineon-api
     restart: unless-stopped
     environment:
       NODE_ENV: production
@@ -79,6 +83,7 @@ services:
     build:
       context: ../../
       dockerfile: apps/web/Dockerfile
+    container_name: traineon-web
     restart: unless-stopped
     ports:
       - '${WEB_PORT:-80}:80'

@@ -2,14 +2,15 @@ version: '3.9'
 
 services:
   postgres:
-    image: pgvector/pgvector:pg16
+    image: postgres:16
+    container_name: traineon-db
     restart: unless-stopped
     environment:
       POSTGRES_USER: traineon
       POSTGRES_PASSWORD: traineon
       POSTGRES_DB: traineon
     ports:
-      - '5433:5432'   # host 5433 → avoid clash with a local Postgres on 5432
+      - '5432:5432'
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./pg-init:/docker-entrypoint-initdb.d  # creates traineon_app on first boot
@@ -21,6 +22,7 @@ services:
 
   redis:
     image: redis:7-alpine
+    container_name: traineon-redis
     restart: unless-stopped
     ports:
       - '6379:6379'
@@ -34,6 +36,7 @@ services:
 
   clickhouse:
     image: clickhouse/clickhouse-server:24
+    container_name: traineon-clickhouse
     restart: unless-stopped
     ports:
       - '8123:8123'   # HTTP interface
@@ -52,6 +55,7 @@ services:
 
   minio:
     image: minio/minio:latest
+    container_name: traineon-minio
     restart: unless-stopped
     command: server /data --console-address ":9001"
     environment:
@@ -72,12 +76,13 @@ services:
     build:
       context: ../../
       dockerfile: infra/docker/Dockerfile
+    container_name: traineon-api
     restart: unless-stopped
     environment:
       NODE_ENV: development
       APP_ROLE: api
       PORT: 3000
-      DATABASE_URL: postgresql://traineon:traineon@postgres:5432/traineon
+      DATABASE_URL: postgresql://traineon:traineon@postgres:5432/traineon_app
       REDIS_URL: redis://redis:6379
       CLICKHOUSE_URL: http://clickhouse:8123
       CLICKHOUSE_DATABASE: traineon

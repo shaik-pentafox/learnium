@@ -3,6 +3,8 @@ dist/
 coverage/
 .env
 *.env.local
+.env.prod
+!*.env.prod.example
 .DS_Store
 .worktrees/
 reference_app/
