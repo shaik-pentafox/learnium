@@ -10,7 +10,7 @@
     "test:integration": "jest --config jest.integration.json",
     "lint": "eslint 'src/**/*.ts'",
     "typecheck": "tsc --noEmit",
-   "seed:llm": "TS_NODE_PROJECT=tsconfig.json node --env-file=.env -r ts-node/register prisma/seed-llm.ts"
+    "seed:llm": "node --env-file=.env -r ts-node/register prisma/seed-llm.ts"
   },
   "dependencies": {
     "@clickhouse/client": "^1.8.2",
