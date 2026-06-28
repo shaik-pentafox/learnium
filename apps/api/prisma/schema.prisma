@@ -90,7 +90,7 @@ model RealtimeTicket {
 model VoiceStyle {
   id       Int       @id @default(autoincrement())
   name     String    @unique
-  provider String    // elevenlabs | azure | google
+  provider String    // sarvam | elevenlabs | azure | google
   voiceId  String
   personas Persona[]
 
@@ -169,6 +169,9 @@ model Persona {
   customInstructions  String?
   voiceStyleId        Int?
   voiceStyle          VoiceStyle?      @relation(fields: [voiceStyleId], references: [id])
+  // BCP-47 codes the trainee may pick from when starting a voice session (e.g.
+  // ["hi-IN","en-IN"]). Empty = voice disabled / text-only persona.
+  languages           String[]         @default([])
   conversationModelId Int?
   conversationModel   LlmModel?        @relation("ConversationModel", fields: [conversationModelId], references: [id])
   scoringModelId      Int?
@@ -231,6 +234,10 @@ model Session {
   status    String        @default("ACTIVE") // ACTIVE | COMPLETED | ABANDONED
   feedback  String?
   isSimulation Boolean       @default(false)
+  // Voice session: STT/TTS loop instead of text. `languageCode` is the trainee's
+  // chosen language at start (must be one of persona.languages).
+  isVoice      Boolean       @default(false)
+  languageCode String?
   startedAt DateTime      @default(now())
   endedAt   DateTime?
   createdAt DateTime      @default(now())

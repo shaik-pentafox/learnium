@@ -130,6 +130,29 @@ const SEED_PERSONAS: SeedPersona[] = [
   },
 ];
 
+// Sarvam Bulbul (bulbul:v3) speakers offered in the persona builder voice picker.
+// Mirrors SARVAM_VOICES in src/core/voice/providers/sarvam.provider.ts.
+const SEED_VOICE_STYLES: { name: string; voiceId: string }[] = [
+  { name: 'Shubh (Sarvam)', voiceId: 'shubh' },
+  { name: 'Priya (Sarvam)', voiceId: 'priya' },
+  { name: 'Neha (Sarvam)', voiceId: 'neha' },
+  { name: 'Rahul (Sarvam)', voiceId: 'rahul' },
+  { name: 'Pooja (Sarvam)', voiceId: 'pooja' },
+  { name: 'Rohan (Sarvam)', voiceId: 'rohan' },
+  { name: 'Kavya (Sarvam)', voiceId: 'kavya' },
+  { name: 'Amit (Sarvam)', voiceId: 'amit' },
+];
+
+async function seedVoiceStyles(): Promise<void> {
+  for (const v of SEED_VOICE_STYLES) {
+    await prisma.voiceStyle.upsert({
+      where: { name: v.name },
+      update: { provider: 'sarvam', voiceId: v.voiceId },
+      create: { name: v.name, provider: 'sarvam', voiceId: v.voiceId },
+    });
+  }
+}
+
 async function seedPersonas(
   personas: SeedPersona[],
   createdById: number,
@@ -328,6 +351,9 @@ async function main() {
       userId: adminUser.id,
     },
   });
+
+  // Sarvam voice catalog for the persona builder picker.
+  await seedVoiceStyles();
 
   // Super-admin personas: published → visible to every trainee.
   await seedPersonas(SEED_PERSONAS, adminUser.id, true);

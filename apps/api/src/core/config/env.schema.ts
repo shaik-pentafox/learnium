@@ -45,6 +45,14 @@ export const EnvSchema = z.object({
   // Sessions — idle ACTIVE sessions older than this are reaped → ABANDONED
   SESSION_IDLE_TIMEOUT_MINUTES: z.coerce.number().int().positive().default(30),
 
+  // Voice (STT/TTS) — provider-agnostic port; only one adapter bound today (Sarvam).
+  VOICE_PROVIDER: z.enum(['sarvam']).default('sarvam'),
+  SARVAM_API_KEY: z.string().optional(),
+  SARVAM_BASE_URL: z.string().url().default('https://api.sarvam.ai'),
+  SARVAM_STT_WS_URL: z.string().default('wss://api.sarvam.ai/speech-to-text/ws'),
+  SARVAM_STT_MODEL: z.string().default('saarika:v2.5'),
+  SARVAM_TTS_MODEL: z.string().default('bulbul:v3'),
+
   // Observability
   LOG_LEVEL: z.enum(['trace', 'debug', 'info', 'warn', 'error', 'fatal']).default('info'),
   OTEL_EXPORTER_OTLP_ENDPOINT: z.string().optional(),
