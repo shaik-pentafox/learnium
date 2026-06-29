@@ -14,4 +14,4 @@ import { SarvamVoiceProvider } from './providers/sarvam.provider';
   providers: [{ provide: VOICE_PROVIDER, useClass: SarvamVoiceProvider }],
   exports: [VOICE_PROVIDER],
 })
-export class VoiceModule {}
+export class VoiceProviderModule {}

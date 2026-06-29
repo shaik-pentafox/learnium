@@ -10,4 +10,5 @@ export const queryKeys = {
   roleplay: ['roleplay'] as const,
   analytics: ['analytics'] as const,
   llmOps: ['llm-ops'] as const,
+  voice: ['voice'] as const,
 } as const

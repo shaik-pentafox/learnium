@@ -13,6 +13,11 @@ const HexColorSchema = z
   .string()
   .regex(/^#[0-9a-fA-F]{6}$/, 'Expected a #RRGGBB hex color');
 
+// BCP-47 language codes a trainee may pick for a voice session (e.g. "hi-IN").
+const LanguagesSchema = z.array(
+  z.string().regex(/^[a-z]{2}-[A-Z]{2}$/, 'Expected a BCP-47 code like "hi-IN"'),
+);
+
 export const CreatePersonaDtoSchema = z.object({
   name: z.string().min(1).max(200),
   description: z.string().optional(),
@@ -23,6 +28,7 @@ export const CreatePersonaDtoSchema = z.object({
   // rendered from these (see core/llm/persona-prompt.template). No raw prompt.
   template: PersonaTemplateSchema,
   voiceStyleId: z.number().int().positive().optional(),
+  languages: LanguagesSchema.optional(),
   conversationModelId: z.number().int().positive().optional(),
   scoringModelId: z.number().int().positive().optional(),
   scoreCriteria: z.array(ScoreCriterionSchema).optional(),
@@ -34,6 +40,7 @@ export const UpdatePersonaDtoSchema = z.object({
   color: HexColorSchema.nullable().optional(),
   template: PersonaTemplateSchema.optional(),
   voiceStyleId: z.number().int().positive().nullable().optional(),
+  languages: LanguagesSchema.optional(),
   conversationModelId: z.number().int().positive().nullable().optional(),
   scoringModelId: z.number().int().positive().nullable().optional(),
   scoreCriteria: z.array(ScoreCriterionSchema).optional(),

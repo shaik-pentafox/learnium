@@ -21,6 +21,7 @@ import {
   DEFAULT_PERSONA_COLOR,
 } from '@/lib/persona-color'
 import { listModels, llmKeys } from '@/services/llm'
+import { listVoices, listVoiceLanguages, voiceKeys } from '@/services/voice'
 import { startSession } from '@/services/roleplay'
 import {
   createPersona,
@@ -49,6 +50,22 @@ const EMOTION_LABELS: Record<(typeof EMOTIONS)[number], string> = {
 const CHANNEL_LABELS: Record<(typeof CHANNELS)[number], string> = {
   chat: 'Text chat',
   audio: 'Voice call',
+}
+
+// Human labels for the BCP-47 codes the voice provider returns. Unlisted codes
+// fall back to the raw code so the picker still works if the catalog grows.
+const LANGUAGE_LABELS: Record<string, string> = {
+  'en-IN': 'English',
+  'hi-IN': 'Hindi',
+  'bn-IN': 'Bengali',
+  'gu-IN': 'Gujarati',
+  'kn-IN': 'Kannada',
+  'ml-IN': 'Malayalam',
+  'mr-IN': 'Marathi',
+  'od-IN': 'Odia',
+  'pa-IN': 'Punjabi',
+  'ta-IN': 'Tamil',
+  'te-IN': 'Telugu',
 }
 
 function emptyTemplate(): PersonaTemplate {
@@ -112,6 +129,10 @@ export function PersonaBuilder({ persona }: { persona?: Persona }) {
     persona?.scoringModelId != null ? String(persona.scoringModelId) : '',
   )
   const [criteria, setCriteria] = useState<CriterionRow[]>(() => toRows(persona))
+  const [voiceStyleId, setVoiceStyleId] = useState<string>(
+    persona?.voiceStyleId != null ? String(persona.voiceStyleId) : '',
+  )
+  const [languages, setLanguages] = useState<string[]>(persona?.languages ?? [])
 
   // Model pickers are Super-Admin only (GET /llm/models is llmops:read).
   const models = useQuery({
@@ -119,6 +140,19 @@ export function PersonaBuilder({ persona }: { persona?: Persona }) {
     queryFn: listModels,
     enabled: isAdmin,
   })
+
+  // Voice catalog (voices + supported languages) for the voice section.
+  const voices = useQuery({ queryKey: voiceKeys.voices(), queryFn: listVoices })
+  const voiceLanguages = useQuery({
+    queryKey: voiceKeys.languages(),
+    queryFn: listVoiceLanguages,
+  })
+
+  function toggleLanguage(code: string) {
+    setLanguages((prev) =>
+      prev.includes(code) ? prev.filter((c) => c !== code) : [...prev, code],
+    )
+  }
 
   function setField<K extends keyof PersonaTemplate>(key: K, value: PersonaTemplate[K]) {
     setTemplate((prev) => ({ ...prev, [key]: value }))
@@ -132,6 +166,8 @@ export function PersonaBuilder({ persona }: { persona?: Persona }) {
       template,
       conversationModelId: conversationModelId ? Number(conversationModelId) : null,
       scoringModelId: scoringModelId ? Number(scoringModelId) : null,
+      voiceStyleId: voiceStyleId ? Number(voiceStyleId) : null,
+      languages,
       scoreCriteria: criteria,
     }
   }
@@ -482,6 +518,25 @@ export function PersonaBuilder({ persona }: { persona?: Persona }) {
             </Section>
           )}
 
+          <Section title="Voice" hint="Used for voice sessions. Pick a voice and the languages a trainee may speak.">
+            <Field label="Voice" hint="The persona's spoken voice (TTS).">
+              <VoiceSelect
+                value={voiceStyleId}
+                onChange={setVoiceStyleId}
+                options={voices.data}
+                loading={voices.isPending}
+              />
+            </Field>
+            <Field label="Languages" hint="Trainee picks one of these when starting a voice session. None → text-only.">
+              <LanguageChips
+                selected={languages}
+                onToggle={toggleLanguage}
+                options={voiceLanguages.data}
+                loading={voiceLanguages.isPending}
+              />
+            </Field>
+          </Section>
+
           {isEdit && persona?.systemPrompt && (
             <Section title="Rendered prompt" hint="Read-only preview of the generated system prompt.">
               <pre className="max-h-72 overflow-auto whitespace-pre-wrap rounded-md bg-muted p-3 font-data text-xs text-muted-foreground">
@@ -580,6 +635,71 @@ function ModelSelect({
         ))}
       </SelectContent>
     </Select>
+  )
+}
+
+function VoiceSelect({
+  value,
+  onChange,
+  options,
+  loading,
+}: {
+  value: string
+  onChange: (v: string) => void
+  options: { id: number; name: string }[] | undefined
+  loading: boolean
+}) {
+  return (
+    <Select value={value || 'none'} onValueChange={(v) => onChange(v === 'none' ? '' : v)}>
+      <SelectTrigger>
+        <SelectValue placeholder={loading ? 'Loading…' : 'No voice'} />
+      </SelectTrigger>
+      <SelectContent>
+        <SelectItem value="none">No voice</SelectItem>
+        {options?.map((v) => (
+          <SelectItem key={v.id} value={String(v.id)}>
+            {v.name}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  )
+}
+
+function LanguageChips({
+  selected,
+  onToggle,
+  options,
+  loading,
+}: {
+  selected: string[]
+  onToggle: (code: string) => void
+  options: string[] | undefined
+  loading: boolean
+}) {
+  if (loading) return <p className="text-xs text-muted-foreground">Loading…</p>
+  if (!options?.length) return <p className="text-xs text-muted-foreground">No languages available.</p>
+  return (
+    <div className="flex flex-wrap gap-2">
+      {options.map((code) => {
+        const active = selected.includes(code)
+        return (
+          <button
+            key={code}
+            type="button"
+            onClick={() => onToggle(code)}
+            aria-pressed={active}
+            className={
+              active
+                ? 'rounded-full border border-primary bg-primary/10 px-3 py-1 text-xs font-medium text-primary'
+                : 'rounded-full border border-border px-3 py-1 text-xs text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground'
+            }
+          >
+            {LANGUAGE_LABELS[code] ?? code}
+          </button>
+        )
+      })}
+    </div>
   )
 }
 

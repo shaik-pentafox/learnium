@@ -8,6 +8,7 @@ import { LoggerModule } from './core/logger/logger.module';
 import { DatabaseModule } from './core/database/database.module';
 import { RedisModule } from './core/redis/redis.module';
 import { LlmModule } from './core/llm/llm.module';
+import { VoiceProviderModule } from './core/voice/voice.module';
 import { CoreAuthModule } from './core/auth/core-auth.module';
 import { AllExceptionsFilter } from './core/errors/all-exceptions.filter';
 import { ResponseInterceptor } from './core/envelope/response.interceptor';
@@ -20,6 +21,7 @@ import { SessionsModule } from './modules/sessions/sessions.module';
 import { RealtimeModule } from './modules/realtime/realtime.module';
 import { LlmOpsModule } from './modules/llm-ops/llm-ops.module';
 import { DashboardModule } from './modules/dashboard/dashboard.module';
+import { VoiceModule } from './modules/voice/voice.module';
 import type { Env } from './core/config/env.schema';
 
 @Module({
@@ -30,6 +32,7 @@ import type { Env } from './core/config/env.schema';
     DatabaseModule,
     RedisModule,
     LlmModule,
+    VoiceProviderModule,
     CoreAuthModule,
     ThrottlerModule.forRootAsync({
       inject: [ConfigService],
@@ -50,6 +53,7 @@ import type { Env } from './core/config/env.schema';
     SessionsModule,
     LlmOpsModule,
     DashboardModule,
+    VoiceModule,
     RealtimeModule,
   ],
   providers: [

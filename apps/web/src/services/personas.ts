@@ -63,6 +63,10 @@ export interface Persona {
   systemPrompt?: string | null
   conversationModelId?: number | null
   scoringModelId?: number | null
+  /** Selected TTS voice (FK to a VoiceStyle row). */
+  voiceStyleId?: number | null
+  /** BCP-47 languages a trainee may pick for a voice session (e.g. ["hi-IN"]). */
+  languages?: string[]
   scoreCriteria?: ScoreCriterion[]
   /** Whether the persona is visible to trainees. */
   isPublished?: boolean
@@ -102,6 +106,10 @@ export interface PersonaInput {
   /** null/undefined → the registry default model is used. */
   conversationModelId?: number | null
   scoringModelId?: number | null
+  /** Selected TTS voice (FK to a VoiceStyle row); null → no voice. */
+  voiceStyleId?: number | null
+  /** BCP-47 languages offered for voice sessions. Empty → text-only. */
+  languages?: string[]
   scoreCriteria: ScoreCriterionInput[]
 }
 
@@ -112,6 +120,8 @@ interface PersonaPayload {
   color?: string
   conversationModelId?: number
   scoringModelId?: number
+  voiceStyleId?: number
+  languages?: string[]
   scoreCriteria?: ScoreCriterionInput[]
   isPublished?: boolean
 }
@@ -170,6 +180,13 @@ export function buildPersonaPayload(
   }
   if (input.scoringModelId != null) {
     payload.scoringModelId = input.scoringModelId
+  }
+  if (input.voiceStyleId != null) {
+    payload.voiceStyleId = input.voiceStyleId
+  }
+  // Only send a non-empty language set; the API rejects malformed codes.
+  if (input.languages?.length) {
+    payload.languages = input.languages
   }
   const criteria = input.scoreCriteria
     .filter((c) => c.name.trim())
