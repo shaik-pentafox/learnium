@@ -4,7 +4,12 @@ import { z } from 'zod';
 
 export const ClientMessageSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('message'), content: z.string(), id: z.string() }),
-  z.object({ type: z.literal('control'), action: z.enum(['begin', 'end']) }),
+  z.object({
+    type: z.literal('control'),
+    action: z.enum(['begin', 'end', 'voice_start', 'voice_stop', 'cancel']),
+    languageCode: z.string().optional(),
+    voiceId: z.string().optional(),
+  }),
   z.object({ type: z.literal('resume'), lastMessageId: z.string() }),
   z.object({ type: z.literal('ping') }),
 ]);

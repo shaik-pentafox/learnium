@@ -12,9 +12,9 @@ const RoleplayServerSchema = z.discriminatedUnion('type', [
     personaName: z.string(),
     personaColor: z.string().nullable().optional(),
     systemPrompt: z.string(),
-    // True when the session already has messages (reconnect) — suppresses the
-    // start-confirm dialog and the opener so neither fires twice.
     hasStarted: z.boolean().optional(),
+    /** BCP-47 codes the persona allows for voice sessions. Empty = voice disabled. */
+    personaLanguages: z.array(z.string()).optional(),
   }),
   z.object({ type: z.literal('token'), delta: z.string() }),
   z.object({
@@ -32,6 +32,12 @@ const RoleplayServerSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('error'), code: z.string(), message: z.string() }),
   z.object({ type: z.literal('reconnect'), reason: z.string() }),
   z.object({ type: z.literal('pong') }),
+  // Voice frames
+  z.object({ type: z.literal('voice_started'), languageCode: z.string(), voiceId: z.string() }),
+  z.object({ type: z.literal('voice_stopped') }),
+  z.object({ type: z.literal('stt_partial'), text: z.string() }),
+  z.object({ type: z.literal('stt_final'), text: z.string() }),
+  z.object({ type: z.literal('tts_meta'), seq: z.number(), mime: z.string(), sampleRate: z.number() }),
 ])
 
 export type RoleplayServerMessage = z.infer<typeof RoleplayServerSchema>
@@ -47,6 +53,8 @@ interface ChannelHandlers {
   onStatus: (status: ChannelStatus) => void
   /** Returns the last assistant messageId so a reconnect can replay misses. */
   lastMessageId: () => string | null
+  /** Called with raw binary TTS audio frames from the server. */
+  onAudio?: (buf: ArrayBuffer) => void
 }
 
 const HEARTBEAT_MS = 25_000
@@ -109,6 +117,13 @@ export class RoleplayChannel {
     }
   }
 
+  /** Send a raw PCM16 audio frame to the server (voice mode only). */
+  sendAudio(buf: ArrayBuffer): void {
+    if (this.ws?.readyState === WebSocket.OPEN) {
+      this.ws.send(buf)
+    }
+  }
+
   close(): void {
     this.closedByCaller = true
     this.clearTimers()
@@ -134,6 +149,7 @@ export class RoleplayChannel {
     )}&sessionId=${encodeURIComponent(this.sessionUid)}`
 
     const ws = new WebSocket(url)
+    ws.binaryType = 'arraybuffer'
     this.ws = ws
 
     ws.onopen = () => {
@@ -149,7 +165,13 @@ export class RoleplayChannel {
     }
 
     ws.onmessage = (event) => {
-      const parsed = RoleplayServerSchema.safeParse(JSON.parse(event.data))
+      if (event.data instanceof ArrayBuffer) {
+        this.handlers.onAudio?.(event.data)
+        return
+      }
+      const parsed = RoleplayServerSchema.safeParse(
+        JSON.parse(event.data as string),
+      )
       if (parsed.success) this.handlers.onMessage(parsed.data)
     }
 

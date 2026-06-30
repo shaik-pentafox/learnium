@@ -26,11 +26,12 @@ export interface RoleplayGraphHooks {
  */
 export function buildRoleplayGraph(
   chat: ChatRunnable,
-  systemPrompt: string,
+  getSystemPrompt: () => string,
   checkpointer: PostgresSaver,
   hooks?: RoleplayGraphHooks,
 ) {
   const callModel = async (state: typeof MessagesAnnotation.State) => {
+    const systemPrompt = getSystemPrompt();
     hooks?.onBeforeInvoke?.({
       messageCount: state.messages.length,
       systemPromptChars: systemPrompt.length,

@@ -2,7 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../database/prisma.service';
 
-export type UsageKind = 'chat' | 'scoring';
+export type UsageKind = 'chat' | 'scoring' | 'stt' | 'tts';
 
 export interface TokenUsage {
   inputTokens: number;

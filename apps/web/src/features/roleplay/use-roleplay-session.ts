@@ -5,6 +5,8 @@ import {
   type RoleplayServerMessage,
 } from '@/lib/ws-client'
 import { getRealtimeTicket } from '@/services/roleplay'
+import { useMicCapture } from './voice/useMicCapture'
+import { AudioPlayer } from './voice/audioPlayer'
 
 export interface ChatMessage {
   /** Stable client id; assistant messages also get a server messageId on done. */
@@ -35,6 +37,16 @@ export interface RoleplaySession {
   /** Ask the customer (persona) to open the conversation. */
   begin: () => void
   endSession: () => void
+  /** BCP-47 codes allowed for voice in this persona (empty = voice disabled). */
+  personaLanguages: string[]
+  /** True while the mic is active and the server's voice loop is running. */
+  voiceActive: boolean
+  /** Live STT partial transcript (null when not speaking). */
+  sttCaption: string | null
+  startVoice: (languageCode: string) => void
+  stopVoice: () => void
+  /** Barge-in: abort the current AI turn + TTS, restart listening. */
+  cancelTurn: () => void
 }
 
 function uid(): string {
@@ -54,9 +66,13 @@ export function useRoleplaySession(sessionUid: string): RoleplaySession {
   const [feedback, setFeedback] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
 
+  const [personaLanguages, setPersonaLanguages] = useState<string[]>([])
+  const [voiceActive, setVoiceActive] = useState(false)
+  const [sttCaption, setSttCaption] = useState<string | null>(null)
+
   const channelRef = useRef<RoleplayChannel | null>(null)
-  // Mirror the latest assistant serverId for the resume contract.
   const lastServerIdRef = useRef<string | null>(null)
+  const playerRef = useRef<AudioPlayer>(new AudioPlayer())
 
   const handleServer = useCallback((msg: RoleplayServerMessage) => {
     switch (msg.type) {
@@ -64,6 +80,7 @@ export function useRoleplaySession(sessionUid: string): RoleplaySession {
         setPersonaName(msg.personaName)
         setPersonaColor(msg.personaColor ?? null)
         setHasStarted(msg.hasStarted ?? false)
+        setPersonaLanguages(msg.personaLanguages ?? [])
         break
       case 'token': {
         const delta = msg.delta
@@ -120,6 +137,30 @@ export function useRoleplaySession(sessionUid: string): RoleplaySession {
         setThinking(false)
         setEnding(false)
         break
+      case 'voice_started':
+        setVoiceActive(true)
+        setSttCaption(null)
+        break
+      case 'voice_stopped':
+        setVoiceActive(false)
+        setSttCaption(null)
+        playerRef.current.stop()
+        break
+      case 'stt_partial':
+        setSttCaption(msg.text)
+        break
+      case 'stt_final':
+        setSttCaption(null)
+        // Show transcribed text as a user message bubble (persisted server-side too).
+        setMessages((prev) => [
+          ...prev,
+          { localId: `u${prev.length}`, role: 'user', content: msg.text, pending: false },
+        ])
+        setThinking(true)
+        break
+      case 'tts_meta':
+        // Binary audio frame follows; handled by onAudio below.
+        break
       case 'reconnect':
       case 'pong':
         break
@@ -127,15 +168,26 @@ export function useRoleplaySession(sessionUid: string): RoleplaySession {
   }, [])
 
   useEffect(() => {
+    const player = playerRef.current
     const channel = new RoleplayChannel(sessionUid, getRealtimeTicket, {
       onMessage: handleServer,
       onStatus: setStatus,
       lastMessageId: () => lastServerIdRef.current,
+      onAudio: (buf) => void player.enqueue(buf),
     })
     channelRef.current = channel
     void channel.connect()
-    return () => channel.close()
+    return () => {
+      channel.close()
+      player.destroy()
+    }
   }, [sessionUid, handleServer])
+
+  // Mic capture: feed PCM16 chunks to the server while voice is active.
+  const onMicChunk = useCallback((buf: ArrayBuffer) => {
+    channelRef.current?.sendAudio(buf)
+  }, [])
+  useMicCapture(onMicChunk, voiceActive)
 
   const sendMessage = useCallback((content: string) => {
     const trimmed = content.trim()
@@ -154,10 +206,25 @@ export function useRoleplaySession(sessionUid: string): RoleplaySession {
   }, [])
 
   const endSession = useCallback(() => {
-    // Optimistic: show the scoring state immediately, before the server's
-    // `session_ending` frame round-trips.
     setEnding(true)
     channelRef.current?.send({ type: 'control', action: 'end' })
+  }, [])
+
+  const startVoice = useCallback((languageCode: string) => {
+    playerRef.current.resume()
+    channelRef.current?.send({ type: 'control', action: 'voice_start', languageCode })
+  }, [])
+
+  const stopVoice = useCallback(() => {
+    channelRef.current?.send({ type: 'control', action: 'voice_stop' })
+    playerRef.current.stop()
+    setVoiceActive(false)
+    setSttCaption(null)
+  }, [])
+
+  const cancelTurn = useCallback(() => {
+    channelRef.current?.send({ type: 'control', action: 'cancel' })
+    playerRef.current.stop()
   }, [])
 
   return {
@@ -175,5 +242,11 @@ export function useRoleplaySession(sessionUid: string): RoleplaySession {
     sendMessage,
     begin,
     endSession,
+    personaLanguages,
+    voiceActive,
+    sttCaption,
+    startVoice,
+    stopVoice,
+    cancelTurn,
   }
 }

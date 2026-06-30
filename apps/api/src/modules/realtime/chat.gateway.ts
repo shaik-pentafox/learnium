@@ -23,6 +23,8 @@ import {
 import { ScoringService } from '../../core/llm/scoring.service';
 import { UsageService } from '../../core/llm/usage.service';
 import { LlmFlowLogger, previewText } from '../../core/llm/llm-flow.logger';
+import { VOICE_PROVIDER, type VoiceProvider } from '../../core/voice/voice-provider';
+import { VoiceTurnManager } from '../../core/voice/voice-turn.manager';
 import { SessionRegistry, type WsClient } from './session-registry';
 
 const END_SENTINEL = '[CONVERSATION_ENDED]';
@@ -42,6 +44,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     private readonly usage: UsageService,
     private readonly flowLog: LlmFlowLogger,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
+    @Inject(VOICE_PROVIDER) private readonly voiceProvider: VoiceProvider,
   ) {}
 
   async handleConnection(client: WebSocket, req: IncomingMessage): Promise<void> {
@@ -72,6 +75,8 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
             templateData: true,
             systemPrompt: true,
             conversationModelId: true,
+            languages: true,
+            voiceStyle: { select: { voiceId: true } },
           },
         },
       },
@@ -88,7 +93,10 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
     // Render the live system prompt from the structured template each session, so
     // master-template improvements reach every persona (cache is the fallback).
-    const systemPrompt = this.resolveSystemPrompt(session.persona);
+    const baseSystemPrompt = this.resolveSystemPrompt(session.persona);
+    // Mutable holder: voice_start swaps `.active` to inject language instruction;
+    // voice_stop restores it. The graph closure captures the holder, not the string.
+    const systemPromptHolder = { active: baseSystemPrompt };
 
     const sessionSpan = this.flowLog.start('roleplay_session', {
       sessionUid,
@@ -97,7 +105,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       personaId: session.persona.id,
       personaName: session.persona.name,
       conversationModelId: session.persona.conversationModelId,
-      systemPromptChars: systemPrompt.length,
+      systemPromptChars: baseSystemPrompt.length,
     });
 
     // Build the per-session roleplay graph: registry model (+ fallbacks) + system
@@ -113,7 +121,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       resolvedProviderType = resolved.providerType;
       graph = buildRoleplayGraph(
         resolved.chat,
-        systemPrompt,
+        () => systemPromptHolder.active,
         this.checkpointer.saver,
         {
           onBeforeInvoke: (ctx) => {
@@ -162,6 +170,10 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     wsClient.modelName = resolvedModelName;
     wsClient.providerType = resolvedProviderType;
     wsClient.lastTurnAt = Date.now();
+    wsClient.personaLanguages = session.persona.languages;
+    wsClient.personaVoiceId = session.persona.voiceStyle?.voiceId ?? null;
+    wsClient.systemPromptHolder = systemPromptHolder;
+    wsClient.baseSystemPrompt = baseSystemPrompt;
 
     // hasStarted lets the client show the start-confirm dialog only on a genuine
     // first join — never again after a reconnect, where messages already exist.
@@ -174,14 +186,19 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       sessionId: session.uid,
       personaName: session.persona.name,
       personaColor: session.persona.color ?? null,
-      systemPrompt,
+      systemPrompt: baseSystemPrompt,
       hasStarted: messageCount > 0,
+      personaLanguages: session.persona.languages,
     });
 
-    client.on('message', (raw: RawData) => void this.onMessage(client, raw));
+    client.on('message', (raw: RawData, isBinary: boolean) =>
+      void this.onMessage(client, raw, isBinary),
+    );
   }
 
   handleDisconnect(client: WebSocket): void {
+    const wsClient = this.registry.get(client);
+    if (wsClient?.voiceTurn) void wsClient.voiceTurn.destroy();
     this.registry.remove(client);
   }
 
@@ -196,10 +213,39 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     return parsed.success ? renderSystemPrompt(parsed.data) : persona.systemPrompt;
   }
 
-  private async onMessage(client: WebSocket, raw: RawData): Promise<void> {
+  private languageInstruction(bcp47: string): string {
+    let langName: string;
+    try {
+      langName = new Intl.DisplayNames(['en'], { type: 'language' }).of(bcp47) ?? bcp47;
+    } catch {
+      langName = bcp47;
+    }
+    return (
+      `\n\n# Language (highest priority)\n` +
+      `You MUST respond entirely in ${langName} (${bcp47}). ` +
+      `Never switch to English or any other language, even if the agent writes in a different language. ` +
+      `This overrides all other instructions.`
+    );
+  }
+
+  private async onMessage(client: WebSocket, raw: RawData, isBinary: boolean): Promise<void> {
+    // Binary frames = PCM16 mic audio, forwarded to the active voice turn manager.
+    if (isBinary) {
+      const wsClient = this.registry.get(client);
+      if (wsClient?.voiceTurn) {
+        const buf = Buffer.isBuffer(raw)
+          ? raw
+          : raw instanceof ArrayBuffer
+            ? Buffer.from(raw)
+            : Buffer.concat(raw as Buffer[]);
+        wsClient.voiceTurn.pushAudio(buf);
+      }
+      return;
+    }
+
     let frame: Record<string, unknown>;
     try {
-      frame = JSON.parse(raw.toString()) as Record<string, unknown>;
+      frame = JSON.parse((raw as Buffer).toString()) as Record<string, unknown>;
     } catch {
       this.sendError(client, 'PARSE_ERROR', 'Invalid JSON');
       return;
@@ -261,12 +307,17 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
   /** Run one assistant (customer) turn: optionally persist the human input, then
    *  stream the persona reply, record telemetry, persist it, and end the session
-   *  if the persona emits the resolution sentinel. */
+   *  if the persona emits the resolution sentinel. Voice callers pass onTokenDelta
+   *  and onStreamEnd to pipe LLM output through the TTS pipeline. */
   private async runAssistantTurn(
     client: WebSocket,
     wsClient: WsClient,
     content: string,
-    opts: { persistUser: boolean },
+    opts: {
+      persistUser: boolean;
+      onTokenDelta?: (delta: string) => void;
+      onStreamEnd?: () => void;
+    },
   ): Promise<void> {
     const turnSpan = this.flowLog.start('roleplay_turn', {
       sessionUid: wsClient.sessionUid,
@@ -304,6 +355,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       if (!text) return;
       fullContent += text;
       this.send(client, { type: 'token', delta: text });
+      opts.onTokenDelta?.(text);
     };
 
     const startedAt = Date.now();
@@ -350,6 +402,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       buffer = buffer.replace(END_SENTINEL, '');
     }
     emit(buffer);
+    opts.onStreamEnd?.();
 
     turnSpan.complete({
       outputChars: fullContent.length,
@@ -411,7 +464,120 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       await this.handleBegin(client);
     } else if (frame['action'] === 'end') {
       await this.endSession(client);
+    } else if (frame['action'] === 'voice_start') {
+      await this.startVoice(client, frame);
+    } else if (frame['action'] === 'voice_stop') {
+      await this.stopVoice(client);
+    } else if (frame['action'] === 'cancel') {
+      const wsClient = this.registry.get(client);
+      wsClient?.voiceTurn?.cancel();
     }
+  }
+
+  private async startVoice(
+    client: WebSocket,
+    frame: Record<string, unknown>,
+  ): Promise<void> {
+    const wsClient = this.registry.get(client);
+    if (!wsClient?.sessionDbId || !wsClient.sessionUid) {
+      this.sendError(client, 'NOT_JOINED', 'No active session');
+      return;
+    }
+
+    const languageCode = typeof frame['languageCode'] === 'string' ? frame['languageCode'] : '';
+    if (!languageCode) {
+      this.sendError(client, 'INVALID_PAYLOAD', 'languageCode required for voice_start');
+      return;
+    }
+
+    const langs = wsClient.personaLanguages ?? [];
+    if (langs.length > 0 && !langs.includes(languageCode)) {
+      this.sendError(
+        client,
+        'INVALID_LANGUAGE',
+        `Language ${languageCode} not configured for this persona`,
+      );
+      return;
+    }
+
+    const voiceId =
+      typeof frame['voiceId'] === 'string' && frame['voiceId']
+        ? frame['voiceId']
+        : (wsClient.personaVoiceId ?? 'priya');
+
+    if (wsClient.voiceTurn) {
+      await wsClient.voiceTurn.destroy();
+      delete wsClient.voiceTurn;
+    }
+
+    await this.prisma.session.update({
+      where: { uid: wsClient.sessionUid },
+      data: { isVoice: true, languageCode },
+    });
+
+    if (wsClient.systemPromptHolder && wsClient.baseSystemPrompt) {
+      wsClient.systemPromptHolder.active =
+        wsClient.baseSystemPrompt + this.languageInstruction(languageCode);
+    }
+
+    const manager = new VoiceTurnManager({
+      provider: this.voiceProvider,
+      languageCode,
+      voiceId,
+      sendJson: (payload) => this.send(client, payload),
+      sendBinary: (buf) => {
+        if (client.readyState === WebSocket.OPEN) client.send(buf);
+      },
+      onFinalTranscript: async (text) => {
+        await this.runAssistantTurn(client, wsClient, text, {
+          persistUser: true,
+          onTokenDelta: (d) => manager.onTokenDelta(d),
+          onStreamEnd: () => manager.onStreamEnd(),
+        });
+      },
+      onSttUsage: (chars, latencyMs) => {
+        void this.usage.record({
+          kind: 'stt',
+          modelName: 'sarvam-saarika-v2',
+          providerType: 'sarvam',
+          sessionId: wsClient.sessionDbId ?? null,
+          userId: wsClient.userId,
+          inputTokens: chars,
+          outputTokens: 0,
+          estimated: true,
+          latencyMs,
+        });
+      },
+      onTtsUsage: (chars, latencyMs) => {
+        void this.usage.record({
+          kind: 'tts',
+          modelName: 'sarvam-bulbul-v2',
+          providerType: 'sarvam',
+          sessionId: wsClient.sessionDbId ?? null,
+          userId: wsClient.userId,
+          inputTokens: 0,
+          outputTokens: chars,
+          estimated: true,
+          latencyMs,
+        });
+      },
+    });
+
+    wsClient.voiceTurn = manager;
+    await manager.startListening();
+    this.send(client, { type: 'voice_started', languageCode, voiceId });
+  }
+
+  private async stopVoice(client: WebSocket): Promise<void> {
+    const wsClient = this.registry.get(client);
+    if (wsClient?.voiceTurn) {
+      await wsClient.voiceTurn.destroy();
+      delete wsClient.voiceTurn;
+    }
+    if (wsClient?.systemPromptHolder && wsClient.baseSystemPrompt) {
+      wsClient.systemPromptHolder.active = wsClient.baseSystemPrompt;
+    }
+    this.send(client, { type: 'voice_stopped' });
   }
 
   private async endSession(client: WebSocket): Promise<void> {

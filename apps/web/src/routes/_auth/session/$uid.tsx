@@ -6,7 +6,7 @@ import {
   useNavigate,
 } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
-import { SendHorizonal, Mic, FlaskConical } from 'lucide-react'
+import { SendHorizonal, Mic, MicOff, FlaskConical } from 'lucide-react'
 import { getSession, sessionKeys } from '@/services/sessions'
 import type { SessionTiming } from '@/services/sessions'
 import { fmtMs } from '@/components/dashboard/primitives'
@@ -62,6 +62,7 @@ function ChatSession() {
   const navigate = useNavigate()
   const [draft, setDraft] = useState('')
   const [startConfirmed, setStartConfirmed] = useState(false)
+  const [langPickerOpen, setLangPickerOpen] = useState(false)
   const lastError = useRef<string | null>(null)
   // Set just before an intentional leave so the nav blocker lets it through.
   const leavingRef = useRef(false)
@@ -142,14 +143,35 @@ function ChatSession() {
   }
 
   const canChat = session.status === 'open' && !session.ended && !session.ending
+  const voiceEnabled = session.personaLanguages.length > 0
   const orbColors = personaOrbColors(session.personaColor)
-  // No voice yet: idle persona "listens", streams as "talking".
   const orbState: AgentState =
     session.status !== 'open' || session.ended
       ? null
       : session.thinking
         ? 'talking'
         : 'listening'
+
+  function handleMicClick() {
+    if (session.voiceActive) {
+      if (session.thinking) {
+        session.cancelTurn()
+      } else {
+        session.stopVoice()
+      }
+    } else if (voiceEnabled) {
+      if (session.personaLanguages.length === 1) {
+        session.startVoice(session.personaLanguages[0]!)
+      } else {
+        setLangPickerOpen(true)
+      }
+    }
+  }
+
+  const MicIcon = session.voiceActive && session.thinking ? MicOff : Mic
+  const micLabel = session.voiceActive
+    ? session.thinking ? 'Interrupt' : 'Stop voice'
+    : voiceEnabled ? 'Start voice' : 'Voice not configured for this persona'
 
   return (
     <div className="mx-auto flex h-[calc(100svh-3.5rem-3rem)] max-w-3xl flex-col">
@@ -202,6 +224,17 @@ function ChatSession() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Language picker: shown when Mic clicked and persona has multiple languages */}
+      <LanguagePickerDialog
+        open={langPickerOpen}
+        languages={session.personaLanguages}
+        onSelect={(code) => {
+          setLangPickerOpen(false)
+          session.startVoice(code)
+        }}
+        onClose={() => setLangPickerOpen(false)}
+      />
 
       {/* Persona header */}
       <header className="flex items-center justify-between gap-3 pb-3">
@@ -293,16 +326,33 @@ function ChatSession() {
           />
         </div>
       ) : (
+        <>
+        {session.voiceActive && (
+          <div className="flex justify-center py-3">
+            <Orb colors={orbColors} agentState={orbState} className="size-36" />
+          </div>
+        )}
+        {session.sttCaption && (
+          <div className="mb-1 rounded-lg border border-border bg-muted/60 px-3 py-1.5 text-sm text-muted-foreground italic">
+            {session.sttCaption}
+            <Caret />
+          </div>
+        )}
         <div className="mt-3 flex items-end gap-2 rounded-xl border border-border bg-background p-2 shadow-sm shadow-black/5">
           <Button
             variant="ghost"
             size="icon"
-            className="shrink-0"
-            disabled
-            aria-label="Voice (coming soon)"
-            title="Voice mode — coming soon"
+            className={cn('shrink-0', session.voiceActive && 'text-primary')}
+            disabled={!voiceEnabled || !canChat}
+            aria-label={micLabel}
+            title={micLabel}
+            onClick={handleMicClick}
           >
-            <Mic className="text-muted-foreground/60" />
+            <MicIcon className={cn(
+              session.voiceActive && session.thinking ? 'text-destructive' :
+              session.voiceActive ? 'animate-pulse text-primary' :
+              !voiceEnabled ? 'text-muted-foreground/40' : ''
+            )} />
           </Button>
           <textarea
             value={draft}
@@ -328,8 +378,61 @@ function ChatSession() {
             <SendHorizonal />
           </Button>
         </div>
+        </>
       )}
     </div>
+  )
+}
+
+const LANG_DISPLAY = new Intl.DisplayNames(['en'], { type: 'language' })
+
+function langLabel(code: string): string {
+  try {
+    return LANG_DISPLAY.of(code) ?? code
+  } catch {
+    return code
+  }
+}
+
+function LanguagePickerDialog({
+  open,
+  languages,
+  onSelect,
+  onClose,
+}: {
+  open: boolean
+  languages: string[]
+  onSelect: (code: string) => void
+  onClose: () => void
+}) {
+  return (
+    <Dialog open={open} onOpenChange={(v) => { if (!v) onClose() }}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Choose a language</DialogTitle>
+          <DialogDescription>
+            Select the language you'll speak in for this voice session.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="grid gap-2 py-2">
+          {languages.map((code) => (
+            <Button
+              key={code}
+              variant="secondary"
+              className="justify-start gap-3 h-11"
+              onClick={() => onSelect(code)}
+            >
+              <Mic className="size-4 shrink-0 text-muted-foreground" />
+              <span>{langLabel(code)}</span>
+              <span className="ml-auto font-mono text-xs text-muted-foreground">{code}</span>
+            </Button>
+          ))}
+        </div>
+        <DialogFooter>
+          <Button variant="ghost" onClick={onClose}>Cancel</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
 
