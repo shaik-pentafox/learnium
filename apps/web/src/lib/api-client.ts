@@ -34,9 +34,8 @@ interface ErrorEnvelope {
   details?: unknown
 }
 
-// When mocks are on, always use the relative path so the MSW service worker
-// (same-origin handlers) intercepts — VITE_API_URL is ignored. Otherwise use
-// the configured direct backend URL (CORS), falling back to the relative path.
+// When mocks are on, use the relative path so the MSW service worker intercepts.
+// Otherwise call the backend directly via VITE_API_URL (CORS).
 const MOCKS_ON = import.meta.env.VITE_ENABLE_MOCKS === 'true'
 export const API_BASE_URL = MOCKS_ON
   ? '/api/v1'

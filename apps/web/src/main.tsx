@@ -24,8 +24,11 @@ declare module '@tanstack/react-router' {
   }
 }
 
-/** Start MSW in dev unless explicitly disabled (VITE_ENABLE_MOCKS=false hits
- *  the live backend through the vite proxy). No-op / not bundled in prod. */
+// Sync the persisted theme to <html> before first paint (covers `system`,
+// which the inline pre-hydration script in index.html can't fully resolve).
+useUiStore.getState().setTheme(useUiStore.getState().theme)
+
+/** Start MSW in dev unless explicitly disabled. Not bundled in production. */
 async function enableMocking(): Promise<void> {
   if (!import.meta.env.DEV) return
   if (import.meta.env.VITE_ENABLE_MOCKS === 'false') return
@@ -33,13 +36,7 @@ async function enableMocking(): Promise<void> {
   await startMockWorker()
 }
 
-// Sync the persisted theme to <html> before first paint (covers `system`,
-// which the inline pre-hydration script in index.html can't fully resolve).
-useUiStore.getState().setTheme(useUiStore.getState().theme)
-
 enableMocking()
-  // Exchange a persisted refresh token for a fresh access token so a reload
-  // keeps the session. Must finish before first render so route guards see it.
   .then(restoreSession)
   .then(() => {
     createRoot(document.getElementById('root')!).render(

@@ -94,10 +94,12 @@ function LoginPage() {
           </Button>
         </form>
 
-        <p className="mt-4 text-center text-xs text-faint-foreground">
-          Dev mock — any username + password{' '}
-          <span className="font-data">password</span>
-        </p>
+        {import.meta.env.DEV && import.meta.env.VITE_ENABLE_MOCKS === 'true' && (
+          <p className="mt-4 text-center text-xs text-faint-foreground">
+            Dev mock — any username + password{' '}
+            <span className="font-data">password</span>
+          </p>
+        )}
       </div>
     </div>
   )

@@ -56,7 +56,6 @@ const BASE_BACKOFF_MS = 500
 /** ws(s):// origin of the backend. Derived from VITE_API_URL when set (direct
  *  mode), otherwise the current page host (legacy vite-proxy mode). */
 function realtimeOrigin(): string {
-  // Mocks on → page host (VITE_API_URL ignored, matching the REST client).
   const apiUrl =
     import.meta.env.VITE_ENABLE_MOCKS === 'true'
       ? undefined
