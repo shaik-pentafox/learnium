@@ -6,7 +6,8 @@ import {
   useNavigate,
 } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
-import { SendHorizonal, Mic, MicOff, FlaskConical } from 'lucide-react'
+import { SendHorizonal, FlaskConical } from 'lucide-react'
+import { z } from 'zod'
 import { getSession, sessionKeys } from '@/services/sessions'
 import type { SessionTiming } from '@/services/sessions'
 import { fmtMs } from '@/components/dashboard/primitives'
@@ -38,6 +39,7 @@ import {
 } from '@/components/chat/conversation'
 
 export const Route = createFileRoute('/_auth/session/$uid')({
+  validateSearch: z.object({ voice: z.string().optional() }).parse,
   component: ChatSession,
 })
 
@@ -51,6 +53,9 @@ interface ScoreRow {
 
 function ChatSession() {
   const { uid } = Route.useParams()
+  const { voice: voiceLang } = Route.useSearch()
+  const voiceMode = !!voiceLang
+
   const role = useAuthStore((s) => s.user?.role ?? 'USER')
   const backTo = role === 'USER' ? '/arena' : '/personas'
   const detail = useQuery({
@@ -62,13 +67,9 @@ function ChatSession() {
   const navigate = useNavigate()
   const [draft, setDraft] = useState('')
   const [startConfirmed, setStartConfirmed] = useState(false)
-  const [langPickerOpen, setLangPickerOpen] = useState(false)
   const lastError = useRef<string | null>(null)
-  // Set just before an intentional leave so the nav blocker lets it through.
   const leavingRef = useRef(false)
 
-  // Focus the chat: collapse an open sidebar on enter, restore it on leave
-  // (desktop only — mobile uses an offcanvas sheet that's already closed).
   const { open: sidebarOpen, setOpen: setSidebarOpen, isMobile } = useSidebar()
   const sidebarWasOpen = useRef(sidebarOpen)
   useEffect(() => {
@@ -77,7 +78,6 @@ function ChatSession() {
     return () => {
       if (sidebarWasOpen.current) setSidebarOpen(true)
     }
-    // Mount/unmount only: collapse on enter, restore prior state on leave.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -88,18 +88,19 @@ function ChatSession() {
     }
   }, [session.error])
 
-  // Session timing (duration, avg reply/latency) is computed server-side at
-  // fetch time, so it's empty until the session ends. Refetch once on end to
-  // pull the populated figures for the score reveal.
   useEffect(() => {
     if (session.ended) void detail.refetch()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session.ended])
 
-  // Block in-app navigation away from a live session (and arm the browser's
-  // native refresh/close prompt). Resolved via the leave-confirm dialog.
-  // Once scoring has started (ending) or finished (ended) there's nothing to
-  // abandon, so don't prompt — only block while the conversation is live.
+  // Auto-start voice when the session is ready (voice mode only)
+  useEffect(() => {
+    if (!voiceLang || session.voiceActive || session.ended) return
+    const ready = session.status === 'open' && (session.hasStarted || startConfirmed)
+    if (ready) session.startVoice(voiceLang)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [voiceLang, session.status, session.hasStarted, startConfirmed, session.voiceActive, session.ended])
+
   const blocker = useBlocker({
     shouldBlockFn: () =>
       !session.ended && !session.ending && !leavingRef.current,
@@ -107,7 +108,6 @@ function ChatSession() {
     withResolver: true,
   })
 
-  // Fresh session (server says no messages yet): confirm before the customer opens.
   const showStartDialog =
     session.hasStarted === false && !startConfirmed && !session.ended
 
@@ -118,21 +118,13 @@ function ChatSession() {
 
   async function cancelStart() {
     leavingRef.current = true
-    try {
-      await abandonSession(uid)
-    } catch {
-      // Best-effort: the idle reaper will sweep an unattended ACTIVE session.
-    }
+    try { await abandonSession(uid) } catch { /* best-effort */ }
     void navigate({ to: backTo })
   }
 
   async function confirmLeave() {
     leavingRef.current = true
-    try {
-      await abandonSession(uid)
-    } catch {
-      // Best-effort; reaper handles a stranded session.
-    }
+    try { await abandonSession(uid) } catch { /* best-effort */ }
     blocker.proceed?.()
   }
 
@@ -143,8 +135,9 @@ function ChatSession() {
   }
 
   const canChat = session.status === 'open' && !session.ended && !session.ending
-  const voiceEnabled = session.personaLanguages.length > 0
   const orbColors = personaOrbColors(session.personaColor)
+
+  // Orb state for header / voice overlay
   const orbState: AgentState =
     session.status !== 'open' || session.ended
       ? null
@@ -152,39 +145,19 @@ function ChatSession() {
         ? 'talking'
         : 'listening'
 
-  function handleMicClick() {
-    if (session.voiceActive) {
-      if (session.thinking) {
-        session.cancelTurn()
-      } else {
-        session.stopVoice()
-      }
-    } else if (voiceEnabled) {
-      if (session.personaLanguages.length === 1) {
-        session.startVoice(session.personaLanguages[0]!)
-      } else {
-        setLangPickerOpen(true)
-      }
-    }
-  }
-
-  const MicIcon = session.voiceActive && session.thinking ? MicOff : Mic
-  const micLabel = session.voiceActive
-    ? session.thinking ? 'Interrupt' : 'Stop voice'
-    : voiceEnabled ? 'Start voice' : 'Voice not configured for this persona'
-
   return (
-    <div className="mx-auto flex h-[calc(100svh-3.5rem-3rem)] max-w-3xl flex-col">
-      {/* Start-confirm: the customer opens the conversation only after the agent
-          is ready. Cancel abandons the session and goes back. */}
+    <div className="relative mx-auto flex h-[calc(100svh-3.5rem-3rem)] max-w-3xl flex-col">
+      {/* Start-confirm dialog */}
       <Dialog open={showStartDialog}>
         <DialogContent showCloseButton={false}>
           <DialogHeader>
-            <DialogTitle>Start roleplay</DialogTitle>
+            <DialogTitle>
+              {voiceMode ? 'Start voice roleplay' : 'Start roleplay'}
+            </DialogTitle>
             <DialogDescription>
-              You are the support agent. {session.personaName ?? 'The customer'}{' '}
-              will open the conversation — read their first message, then reply in
-              character. Ready to begin?
+              {voiceMode
+                ? `You are the support agent. ${session.personaName ?? 'The customer'} will open the conversation. Speak naturally — the AI will respond in your chosen language.`
+                : `You are the support agent. ${session.personaName ?? 'The customer'} will open the conversation — read their first message, then reply in character. Ready to begin?`}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -192,25 +165,23 @@ function ChatSession() {
               Cancel
             </Button>
             <Button onClick={confirmStart} disabled={session.status !== 'open'}>
-              Start conversation
+              {voiceMode ? 'Start voice session' : 'Start conversation'}
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
-      {/* Leave-confirm: navigating away mid-session abandons it (no score). */}
+      {/* Leave-confirm dialog */}
       <Dialog
         open={blocker.status === 'blocked'}
-        onOpenChange={(open) => {
-          if (!open) blocker.reset?.()
-        }}
+        onOpenChange={(open) => { if (!open) blocker.reset?.() }}
       >
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Leave this session?</DialogTitle>
             <DialogDescription>
-              Leaving now ends the roleplay without scoring — it won’t count as a
-              completed attempt. To get feedback, finish and use “End &amp; score”
+              Leaving now ends the roleplay without scoring — it won't count as a
+              completed attempt. To get feedback, finish and use "End &amp; score"
               instead.
             </DialogDescription>
           </DialogHeader>
@@ -225,19 +196,8 @@ function ChatSession() {
         </DialogContent>
       </Dialog>
 
-      {/* Language picker: shown when Mic clicked and persona has multiple languages */}
-      <LanguagePickerDialog
-        open={langPickerOpen}
-        languages={session.personaLanguages}
-        onSelect={(code) => {
-          setLangPickerOpen(false)
-          session.startVoice(code)
-        }}
-        onClose={() => setLangPickerOpen(false)}
-      />
-
       {/* Persona header */}
-      <header className="flex items-center justify-between gap-3 pb-3">
+      <header className="relative z-10 flex items-center justify-between gap-3 pb-3">
         <div className="flex items-center gap-3">
           <div
             className="size-11 shrink-0 rounded-full"
@@ -277,162 +237,128 @@ function ChatSession() {
           <ReconnectBanner status={session.status} />
         )}
 
-      {/* Transcript */}
-      <Conversation className="rounded-xl border border-border bg-surface">
-        <ConversationContent className="space-y-1">
-          {session.messages.length === 0 && !session.thinking && (
-            <EmptyState colors={orbColors} />
+      {/* Transcript + voice overlay container */}
+      <div className="relative flex-1 overflow-hidden">
+        <Conversation
+          className={cn(
+            'h-full rounded-xl border border-border bg-surface',
+            voiceMode && session.voiceActive && !session.ending && !session.ended && 'opacity-30 pointer-events-none select-none',
           )}
-          {session.messages.map((m) => (
-            <Bubble key={m.localId} message={m} />
-          ))}
-          {session.thinking &&
-            !session.ending &&
-            session.messages.at(-1)?.role !== 'assistant' && <TypingBubble />}
-          {session.ending && !session.ended && (
-            <ScoringIndicator
-              colors={orbColors}
-              connected={session.status === 'open'}
-            />
-          )}
-          {session.ended && (
-            <ScoreReveal
-              scores={(session.scores ?? []) as ScoreRow[]}
-              feedback={session.feedback}
-              timing={detail.data?.timing}
-            />
-          )}
-        </ConversationContent>
-        <ConversationScrollButton />
-      </Conversation>
+        >
+          <ConversationContent className="space-y-1">
+            {session.messages.length === 0 && !session.thinking && (
+              <EmptyState colors={orbColors} />
+            )}
+            {session.messages.map((m) => (
+              <Bubble key={m.localId} message={m} />
+            ))}
+            {session.thinking &&
+              !session.ending &&
+              session.messages.at(-1)?.role !== 'assistant' && <TypingBubble />}
+            {session.ending && !session.ended && (
+              <ScoringIndicator
+                colors={orbColors}
+                connected={session.status === 'open'}
+              />
+            )}
+            {session.ended && (
+              <ScoreReveal
+                scores={(session.scores ?? []) as ScoreRow[]}
+                feedback={session.feedback}
+                timing={detail.data?.timing}
+              />
+            )}
+          </ConversationContent>
+          <ConversationScrollButton />
+        </Conversation>
 
-      {/* Composer (voice-ready shell — mic slot reserved) */}
-      {session.ended ? (
+        {/* Voice overlay — sits over transcript, orb centered */}
+        {voiceMode && session.voiceActive && !session.ending && !session.ended && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center rounded-xl bg-background/75 backdrop-blur-md">
+            <Orb
+              colors={orbColors}
+              agentState={orbState}
+              className="size-52"
+            />
+            {session.sttCaption && (
+              <p className="mt-5 max-w-xs text-center text-sm italic text-muted-foreground">
+                {session.sttCaption}
+                <Caret />
+              </p>
+            )}
+            <Button
+              variant="ghost"
+              size="sm"
+              className="mt-6 text-muted-foreground hover:text-foreground"
+              onClick={() => {
+                if (session.thinking) session.cancelTurn()
+                else session.stopVoice()
+              }}
+            >
+              {session.thinking ? 'Interrupt' : 'Stop voice'}
+            </Button>
+          </div>
+        )}
+      </div>
+
+      {/* Composer — text mode only */}
+      {!voiceMode && (
+        session.ended ? (
+          <div className="pt-3">
+            <Link to={backTo} className="text-sm text-primary hover:underline">
+              ← Back
+            </Link>
+          </div>
+        ) : session.ending ? (
+          <div className="mt-3 flex items-center justify-center gap-2 rounded-xl border border-border bg-background p-3 shadow-sm shadow-black/5">
+            <Dot /> <Dot /> <Dot />
+            <ShimmeringText
+              text={
+                session.status === 'open'
+                  ? 'Scoring your conversation…'
+                  : 'Reconnecting…'
+              }
+              className="text-sm"
+            />
+          </div>
+        ) : (
+          <div className="mt-3 flex items-end gap-2 rounded-xl border border-border bg-background p-2 shadow-sm shadow-black/5">
+            <textarea
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault()
+                  submit()
+                }
+              }}
+              rows={1}
+              placeholder={canChat ? 'Type a message…' : 'Connecting…'}
+              disabled={!canChat}
+              className="max-h-32 flex-1 resize-none bg-transparent px-1 py-2 text-sm outline-none placeholder:text-muted-foreground/70 disabled:opacity-60"
+            />
+            <Button
+              size="icon"
+              className="shrink-0"
+              aria-label="Send"
+              onClick={submit}
+              disabled={!canChat || !draft.trim()}
+            >
+              <SendHorizonal />
+            </Button>
+          </div>
+        )
+      )}
+
+      {/* Voice mode ended — back link */}
+      {voiceMode && session.ended && (
         <div className="pt-3">
           <Link to={backTo} className="text-sm text-primary hover:underline">
             ← Back
           </Link>
         </div>
-      ) : session.ending ? (
-        <div className="mt-3 flex items-center justify-center gap-2 rounded-xl border border-border bg-background p-3 shadow-sm shadow-black/5">
-          <Dot /> <Dot /> <Dot />
-          <ShimmeringText
-            text={
-              session.status === 'open'
-                ? 'Scoring your conversation…'
-                : 'Reconnecting…'
-            }
-            className="text-sm"
-          />
-        </div>
-      ) : (
-        <>
-        {session.voiceActive && (
-          <div className="flex justify-center py-3">
-            <Orb colors={orbColors} agentState={orbState} className="size-36" />
-          </div>
-        )}
-        {session.sttCaption && (
-          <div className="mb-1 rounded-lg border border-border bg-muted/60 px-3 py-1.5 text-sm text-muted-foreground italic">
-            {session.sttCaption}
-            <Caret />
-          </div>
-        )}
-        <div className="mt-3 flex items-end gap-2 rounded-xl border border-border bg-background p-2 shadow-sm shadow-black/5">
-          <Button
-            variant="ghost"
-            size="icon"
-            className={cn('shrink-0', session.voiceActive && 'text-primary')}
-            disabled={!voiceEnabled || !canChat}
-            aria-label={micLabel}
-            title={micLabel}
-            onClick={handleMicClick}
-          >
-            <MicIcon className={cn(
-              session.voiceActive && session.thinking ? 'text-destructive' :
-              session.voiceActive ? 'animate-pulse text-primary' :
-              !voiceEnabled ? 'text-muted-foreground/40' : ''
-            )} />
-          </Button>
-          <textarea
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault()
-                submit()
-              }
-            }}
-            rows={1}
-            placeholder={canChat ? 'Type a message…' : 'Connecting…'}
-            disabled={!canChat}
-            className="max-h-32 flex-1 resize-none bg-transparent px-1 py-2 text-sm outline-none placeholder:text-muted-foreground/70 disabled:opacity-60"
-          />
-          <Button
-            size="icon"
-            className="shrink-0"
-            aria-label="Send"
-            onClick={submit}
-            disabled={!canChat || !draft.trim()}
-          >
-            <SendHorizonal />
-          </Button>
-        </div>
-        </>
       )}
     </div>
-  )
-}
-
-const LANG_DISPLAY = new Intl.DisplayNames(['en'], { type: 'language' })
-
-function langLabel(code: string): string {
-  try {
-    return LANG_DISPLAY.of(code) ?? code
-  } catch {
-    return code
-  }
-}
-
-function LanguagePickerDialog({
-  open,
-  languages,
-  onSelect,
-  onClose,
-}: {
-  open: boolean
-  languages: string[]
-  onSelect: (code: string) => void
-  onClose: () => void
-}) {
-  return (
-    <Dialog open={open} onOpenChange={(v) => { if (!v) onClose() }}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>Choose a language</DialogTitle>
-          <DialogDescription>
-            Select the language you'll speak in for this voice session.
-          </DialogDescription>
-        </DialogHeader>
-        <div className="grid gap-2 py-2">
-          {languages.map((code) => (
-            <Button
-              key={code}
-              variant="secondary"
-              className="justify-start gap-3 h-11"
-              onClick={() => onSelect(code)}
-            >
-              <Mic className="size-4 shrink-0 text-muted-foreground" />
-              <span>{langLabel(code)}</span>
-              <span className="ml-auto font-mono text-xs text-muted-foreground">{code}</span>
-            </Button>
-          ))}
-        </div>
-        <DialogFooter>
-          <Button variant="ghost" onClick={onClose}>Cancel</Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
   )
 }
 
@@ -470,9 +396,6 @@ function Bubble({ message }: { message: ChatMessage }) {
   )
 }
 
-/** Shown between "End & score" and the scored result — the orb pulses while
- *  the backend grades the transcript. If the socket drops mid-scoring, it
- *  surfaces the reconnect state instead of spinning forever. */
 function ScoringIndicator({
   colors,
   connected,
@@ -499,7 +422,6 @@ function ScoringIndicator({
   )
 }
 
-/** Mid-session disconnect notice (reconnecting/closed before scoring). */
 function ReconnectBanner({ status }: { status: ChannelStatus }) {
   const closed = status === 'closed'
   return (

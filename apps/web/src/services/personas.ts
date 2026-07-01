@@ -49,6 +49,8 @@ export interface PersonaSummary {
   isPublished?: boolean
   /** True when the viewer may test but not edit (e.g. trainer viewing a super-admin persona). */
   readonly?: boolean
+  /** BCP-47 language codes configured for voice sessions. Empty = text-only. */
+  languages?: string[]
 }
 
 export interface Persona {
