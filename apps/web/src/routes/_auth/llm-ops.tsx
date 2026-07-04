@@ -124,7 +124,9 @@ function ProviderCard({
           </div>
           <div>
             <div className="font-medium">{provider.name}</div>
-            <div className="text-xs text-muted-foreground">{provider.type}</div>
+            <div className="text-xs text-muted-foreground">
+              {provider.masterProvider?.name ?? provider.type}
+            </div>
           </div>
         </div>
         <div className="flex items-center gap-1">
@@ -142,8 +144,8 @@ function ProviderCard({
       </div>
       <dl className="mt-4 grid grid-cols-2 gap-3 text-sm">
         <div>
-          <dt className="text-xs text-muted-foreground">Priority</dt>
-          <dd className="font-data tabular-nums">{provider.priority}</dd>
+          <dt className="text-xs text-muted-foreground">API key</dt>
+          <dd className="font-data">{provider.credentialHint ?? '—'}</dd>
         </div>
         <div>
           <dt className="text-xs text-muted-foreground">Budget (MTD)</dt>

@@ -38,6 +38,8 @@ const RoleplayServerSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('stt_partial'), text: z.string() }),
   z.object({ type: z.literal('stt_final'), text: z.string() }),
   z.object({ type: z.literal('tts_meta'), seq: z.number(), mime: z.string(), sampleRate: z.number() }),
+  /** Barge-in: user spoke over the agent — stop playback immediately. */
+  z.object({ type: z.literal('tts_stop') }),
 ])
 
 export type RoleplayServerMessage = z.infer<typeof RoleplayServerSchema>

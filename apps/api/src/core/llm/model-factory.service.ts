@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import Redis from 'ioredis';
 import { ChatOpenAI } from '@langchain/openai';
 import { ChatGoogleGenerativeAI } from '@langchain/google-genai';
+import { ChatAnthropic } from '@langchain/anthropic';
 import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
 import type { Runnable } from '@langchain/core/runnables';
 import type { BaseLanguageModelInput } from '@langchain/core/language_models/base';
@@ -19,14 +20,14 @@ import { LlmFlowLogger } from './llm-flow.logger';
 export const MODEL_CACHE_CHANNEL = 'llm:model-cache:invalidate';
 
 const OPENROUTER_BASE = 'https://openrouter.ai/api/v1';
-const MAX_FALLBACKS = 3;
 
 interface ProviderRecord {
   type: string;
   baseUrl: string | null;
   credentialRef: string | null;
   isEnabled: boolean;
-  priority: number;
+  /** Master catalog link — preferred source of the runtime adapter branch. */
+  masterProvider: { adapterType: string } | null;
 }
 
 interface ModelRecord {
@@ -44,7 +45,8 @@ export interface ResolvedModel {
   providerType: string;
   /** Raw primary model — use for `.withStructuredOutput()`. */
   model: BaseChatModel;
-  /** Primary + ordered fallbacks — use for streaming chat. */
+  /** Chat runnable for streaming (same as `model`; no fallback chain — the
+   *  primary is admin-chosen, and its failure surfaces as PROVIDER_ERROR). */
   chat: ChatRunnable;
 }
 
@@ -75,7 +77,7 @@ export class ModelFactoryService {
     });
   }
 
-  /** Resolve a logical model id (or the default) to a usable chat model + fallbacks. */
+  /** Resolve a logical chat-model id (or the primary chat model) to a usable model. */
   async resolve(modelId: number | null | undefined): Promise<ResolvedModel> {
     const span = this.flowLog.start('model_resolve', {
       requestedModelId: modelId ?? null,
@@ -84,15 +86,10 @@ export class ModelFactoryService {
       const record = await this.loadModel(modelId);
       const cacheHit = this.cache.has(record.id);
       const model = this.getOrBuild(record);
-      const fallbacks = await this.buildFallbacks(record.id);
-      const chat: ChatRunnable = fallbacks.length
-        ? model.withFallbacks({ fallbacks })
-        : model;
       span.complete({
         resolvedModelId: record.id,
         modelName: record.name,
         providerType: record.provider.type,
-        fallbackCount: fallbacks.length,
         cacheHit,
       });
       return {
@@ -100,7 +97,7 @@ export class ModelFactoryService {
         name: record.name,
         providerType: record.provider.type,
         model,
-        chat,
+        chat: model,
       };
     } catch (err) {
       span.fail(err);
@@ -111,12 +108,15 @@ export class ModelFactoryService {
   private async loadModel(
     modelId: number | null | undefined,
   ): Promise<ModelRecord> {
+    // kind guard: a voice model id must never resolve as the chat engine.
     const where = modelId
-      ? { id: modelId, provider: { isEnabled: true } }
-      : { isDefault: true, provider: { isEnabled: true } };
+      ? { id: modelId, kind: 'chat', provider: { isEnabled: true } }
+      : { isDefault: true, kind: 'chat', provider: { isEnabled: true } };
     const model = await this.prisma.llmModel.findFirst({
       where,
-      include: { provider: true },
+      include: {
+        provider: { include: { masterProvider: { select: { adapterType: true } } } },
+      },
     });
     if (!model) {
       throw new DomainException(
@@ -126,17 +126,6 @@ export class ModelFactoryService {
       );
     }
     return model as ModelRecord;
-  }
-
-  /** Other enabled-provider models, highest provider priority first, as a fallback chain. */
-  private async buildFallbacks(primaryId: number): Promise<BaseChatModel[]> {
-    const others = await this.prisma.llmModel.findMany({
-      where: { id: { not: primaryId }, provider: { isEnabled: true } },
-      include: { provider: true },
-      orderBy: { provider: { priority: 'desc' } },
-      take: MAX_FALLBACKS,
-    });
-    return others.map((m) => this.getOrBuild(m as ModelRecord));
   }
 
   private getOrBuild(record: ModelRecord): BaseChatModel {
@@ -155,7 +144,9 @@ export class ModelFactoryService {
           this.config.get('CREDENTIAL_ENCRYPTION_KEY', { infer: true }),
         )
       : undefined;
-    const type = provider.type.toLowerCase();
+    // Master-linked providers dispatch on the catalog's adapterType; legacy rows
+    // fall back to their free-text `type`.
+    const type = (provider.masterProvider?.adapterType ?? provider.type).toLowerCase();
 
     if (type === 'gemini') {
       return new ChatGoogleGenerativeAI({
@@ -165,7 +156,15 @@ export class ModelFactoryService {
       });
     }
 
-    // openai | openrouter | azure_openai | custom → OpenAI-compatible endpoint
+    if (type === 'anthropic') {
+      return new ChatAnthropic({
+        model: record.name,
+        streaming: true,
+        ...(apiKey ? { apiKey } : {}),
+      });
+    }
+
+    // openai | openrouter | azure_openai | sarvam | custom → OpenAI-compatible
     const baseURL =
       provider.baseUrl ?? (type === 'openrouter' ? OPENROUTER_BASE : undefined);
     return new ChatOpenAI({

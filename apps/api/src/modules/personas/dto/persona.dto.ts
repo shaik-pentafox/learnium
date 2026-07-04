@@ -28,6 +28,10 @@ export const CreatePersonaDtoSchema = z.object({
   // rendered from these (see core/llm/persona-prompt.template). No raw prompt.
   template: PersonaTemplateSchema,
   voiceStyleId: z.number().int().positive().optional(),
+  // Voice model pin (kind='voice' registry row). Unset = primary voice model.
+  voiceModelId: z.number().int().positive().optional(),
+  // Provider voice name (e.g. 'alloy', 'Puck'). Unset = model's first voice.
+  voiceId: z.string().min(1).max(100).optional(),
   languages: LanguagesSchema.optional(),
   conversationModelId: z.number().int().positive().optional(),
   scoringModelId: z.number().int().positive().optional(),
@@ -40,6 +44,8 @@ export const UpdatePersonaDtoSchema = z.object({
   color: HexColorSchema.nullable().optional(),
   template: PersonaTemplateSchema.optional(),
   voiceStyleId: z.number().int().positive().nullable().optional(),
+  voiceModelId: z.number().int().positive().nullable().optional(),
+  voiceId: z.string().min(1).max(100).nullable().optional(),
   languages: LanguagesSchema.optional(),
   conversationModelId: z.number().int().positive().nullable().optional(),
   scoringModelId: z.number().int().positive().nullable().optional(),

@@ -93,11 +93,18 @@ function ChatSession() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session.ended])
 
-  // Auto-start voice when the session is ready (voice mode only)
+  // Auto-start voice when the session is ready (voice mode only). One attempt
+  // per mount — an upstream failure sends voice_stopped, and retrying in a loop
+  // would hammer the provider; the user can retry by reloading.
+  const voiceAutoStarted = useRef(false)
   useEffect(() => {
     if (!voiceLang || session.voiceActive || session.ended) return
+    if (voiceAutoStarted.current) return
     const ready = session.status === 'open' && (session.hasStarted || startConfirmed)
-    if (ready) session.startVoice(voiceLang)
+    if (ready) {
+      voiceAutoStarted.current = true
+      session.startVoice(voiceLang)
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [voiceLang, session.status, session.hasStarted, startConfirmed, session.voiceActive, session.ended])
 
@@ -349,6 +356,25 @@ function ChatSession() {
           </div>
         )
       )}
+
+      {/* Voice mode: upstream dropped (voice_stopped) — offer a manual restart */}
+      {voiceMode &&
+        !session.ended &&
+        !session.ending &&
+        !session.voiceActive &&
+        voiceAutoStarted.current && (
+          <div className="mt-3 flex items-center justify-center gap-3 rounded-xl border border-border bg-background p-3 text-sm shadow-sm shadow-black/5">
+            <span className="text-muted-foreground">Voice stopped.</span>
+            <Button
+              size="sm"
+              variant="secondary"
+              disabled={session.status !== 'open'}
+              onClick={() => voiceLang && session.startVoice(voiceLang)}
+            >
+              Restart voice
+            </Button>
+          </div>
+        )}
 
       {/* Voice mode ended — back link */}
       {voiceMode && session.ended && (

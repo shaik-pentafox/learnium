@@ -1,143 +1,275 @@
 /**
- * Standalone LLM registry seed — providers + models only, NO API keys.
+ * Master catalog seed — the provider/model catalog admins configure FROM.
  *
- * Keys are added by a Super Admin in the UI (BYOK, encrypted at rest), so this
- * seed deliberately leaves `credentialRef` null. Run it independently of the
- * main seed:
+ * Seeds `master_providers` + `master_models` (chat + voice), upserting by key so
+ * re-running refreshes the catalog (new models arrive by re-running this seed —
+ * no code change). NO API keys and NO configured providers are created here:
+ * a Super Admin picks a master provider in the UI and supplies a key (BYOK,
+ * encrypted at rest) to create the configured `llm_providers` row.
  *
- *   npx ts-node --project tsconfig.json prisma/seed-llm.ts
- *   # or: npm run seed:llm  (from apps/api)
+ * Also backfills legacy rows: pre-masters `llm_providers` / `llm_models` rows
+ * are linked to their master by type/name match so existing setups keep working.
  *
- * Pricing / context windows are real values pulled from provider docs (Jun
- * 2026) and are fully editable in the UI afterwards.
- *   - gpt-4o-mini   : $0.15 / $0.60 per 1M, 128K ctx
- *   - gpt-4o        : $2.50 / $10.00 per 1M, 128K ctx
- *   - gemini-2.5-flash      : $0.30 / $2.50 per 1M, 1M ctx
- *   - gemini-2.5-flash-lite : $0.10 / $0.40 per 1M, 1M ctx
- *   - gemini-2.5-pro        : $1.25 / $10.00 per 1M, 1M ctx
+ *   npm run seed:llm   (from apps/api)
+ *
+ * Pricing / context windows pulled from provider docs (Jul 2026); chat prices
+ * are per 1M text tokens, voice prices per 1M audio tokens.
  */
 import { PrismaClient } from '@prisma/client';
 
 const prisma = new PrismaClient();
 
-interface SeedProvider {
+interface SeedMasterProvider {
+  key: string;
   name: string;
-  /** Factory key: 'openai' → ChatOpenAI, 'gemini' → ChatGoogleGenerativeAI. */
-  type: string;
-  priority: number;
+  /** Runtime construct branch: 'openai' | 'gemini' | 'anthropic' | 'sarvam'. */
+  adapterType: string;
+  defaultBaseUrl?: string;
+  supports: string[]; // ['chat'] | ['chat','voice'] | ['voice']
 }
 
-interface SeedModel {
-  name: string;
-  providerName: string;
-  capabilities: string[];
-  contextWindowTokens: number;
-  inputPricePerMillion: number;
-  outputPricePerMillion: number;
-  isDefault?: boolean;
+interface SeedMasterModel {
+  providerKey: string;
+  key: string; // provider-side model id
+  name: string; // display
+  kind: 'chat' | 'voice';
+  contextWindowTokens?: number;
+  inputPricePerMillion?: number;
+  outputPricePerMillion?: number;
+  voicePipeline?: 's2s' | 'stt+tts';
+  languages?: string[];
+  voices?: string[];
 }
 
-const PROVIDERS: SeedProvider[] = [
-  { name: 'OpenAI', type: 'openai', priority: 10 },
-  { name: 'Google Gemini', type: 'gemini', priority: 20 },
+const MASTER_PROVIDERS: SeedMasterProvider[] = [
+  { key: 'openai', name: 'OpenAI', adapterType: 'openai', supports: ['chat', 'voice'] },
+  { key: 'google', name: 'Google Gemini', adapterType: 'gemini', supports: ['chat', 'voice'] },
+  { key: 'anthropic', name: 'Anthropic', adapterType: 'anthropic', supports: ['chat'] },
+  {
+    key: 'sarvam',
+    name: 'Sarvam AI',
+    adapterType: 'sarvam',
+    defaultBaseUrl: 'https://api.sarvam.ai/v1',
+    supports: ['chat', 'voice'],
+  },
 ];
 
-const MODELS: SeedModel[] = [
-  // OpenAI
+/** The 11 Indic languages Sarvam Saarika/Bulbul support (BCP-47). */
+const SARVAM_LANGUAGES = [
+  'bn-IN', 'en-IN', 'gu-IN', 'hi-IN', 'kn-IN', 'ml-IN',
+  'mr-IN', 'od-IN', 'pa-IN', 'ta-IN', 'te-IN',
+];
+
+const MASTER_MODELS: SeedMasterModel[] = [
+  // ── OpenAI chat ──
   {
-    name: 'gpt-4o-mini',
-    providerName: 'OpenAI',
-    capabilities: ['conversation', 'scoring', 'vision'],
-    contextWindowTokens: 128_000,
-    inputPricePerMillion: 0.15,
-    outputPricePerMillion: 0.6,
-    isDefault: true, // cheap, capable default
+    providerKey: 'openai', key: 'gpt-4o-mini', name: 'GPT-4o Mini', kind: 'chat',
+    contextWindowTokens: 128_000, inputPricePerMillion: 0.15, outputPricePerMillion: 0.6,
   },
   {
-    name: 'gpt-4o',
-    providerName: 'OpenAI',
-    capabilities: ['conversation', 'scoring', 'vision', 'tools'],
-    contextWindowTokens: 128_000,
-    inputPricePerMillion: 2.5,
-    outputPricePerMillion: 10.0,
-  },
-  // Google Gemini
-  {
-    name: 'gemini-2.5-flash',
-    providerName: 'Google Gemini',
-    capabilities: ['conversation', 'scoring', 'vision'],
-    contextWindowTokens: 1_048_576,
-    inputPricePerMillion: 0.3,
-    outputPricePerMillion: 2.5,
+    providerKey: 'openai', key: 'gpt-4o', name: 'GPT-4o', kind: 'chat',
+    contextWindowTokens: 128_000, inputPricePerMillion: 2.5, outputPricePerMillion: 10.0,
   },
   {
-    name: 'gemini-2.5-flash-lite',
-    providerName: 'Google Gemini',
-    capabilities: ['conversation', 'scoring'],
-    contextWindowTokens: 1_048_576,
-    inputPricePerMillion: 0.1,
-    outputPricePerMillion: 0.4,
+    providerKey: 'openai', key: 'gpt-4.1', name: 'GPT-4.1', kind: 'chat',
+    contextWindowTokens: 1_047_576, inputPricePerMillion: 2.0, outputPricePerMillion: 8.0,
   },
   {
-    name: 'gemini-2.5-pro',
-    providerName: 'Google Gemini',
-    capabilities: ['conversation', 'scoring', 'vision', 'tools'],
-    contextWindowTokens: 1_048_576,
-    inputPricePerMillion: 1.25,
-    outputPricePerMillion: 10.0,
+    providerKey: 'openai', key: 'gpt-4.1-mini', name: 'GPT-4.1 Mini', kind: 'chat',
+    contextWindowTokens: 1_047_576, inputPricePerMillion: 0.4, outputPricePerMillion: 1.6,
+  },
+  {
+    providerKey: 'openai', key: 'gpt-4.1-nano', name: 'GPT-4.1 Nano', kind: 'chat',
+    contextWindowTokens: 1_047_576, inputPricePerMillion: 0.1, outputPricePerMillion: 0.4,
+  },
+  // ── OpenAI voice (GA S2S models, prices per 1M audio tokens). The old
+  //    gpt-4o-*-realtime-preview models were retired with the beta API. ──
+  {
+    providerKey: 'openai', key: 'gpt-realtime', name: 'GPT Realtime', kind: 'voice',
+    voicePipeline: 's2s',
+    inputPricePerMillion: 32.0, outputPricePerMillion: 64.0,
+    languages: ['en-IN', 'hi-IN'],
+    voices: ['alloy', 'ash', 'ballad', 'coral', 'echo', 'sage', 'shimmer', 'verse', 'marin', 'cedar'],
+  },
+  {
+    providerKey: 'openai', key: 'gpt-realtime-mini', name: 'GPT Realtime Mini', kind: 'voice',
+    voicePipeline: 's2s',
+    inputPricePerMillion: 10.0, outputPricePerMillion: 20.0,
+    languages: ['en-IN', 'hi-IN'],
+    voices: ['alloy', 'ash', 'ballad', 'coral', 'echo', 'sage', 'shimmer', 'verse', 'marin', 'cedar'],
+  },
+  // ── Google chat ──
+  {
+    providerKey: 'google', key: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', kind: 'chat',
+    contextWindowTokens: 1_048_576, inputPricePerMillion: 0.3, outputPricePerMillion: 2.5,
+  },
+  {
+    providerKey: 'google', key: 'gemini-2.5-flash-lite', name: 'Gemini 2.5 Flash Lite', kind: 'chat',
+    contextWindowTokens: 1_048_576, inputPricePerMillion: 0.1, outputPricePerMillion: 0.4,
+  },
+  {
+    providerKey: 'google', key: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro', kind: 'chat',
+    contextWindowTokens: 1_048_576, inputPricePerMillion: 1.25, outputPricePerMillion: 10.0,
+  },
+  {
+    providerKey: 'google', key: 'gemini-2.0-flash', name: 'Gemini 2.0 Flash', kind: 'chat',
+    contextWindowTokens: 1_048_576, inputPricePerMillion: 0.1, outputPricePerMillion: 0.4,
+  },
+  // ── Google voice (S2S Live API, prices per 1M audio tokens) ──
+  {
+    providerKey: 'google', key: 'gemini-2.0-flash-live-001', name: 'Gemini 2.0 Flash Live', kind: 'voice',
+    voicePipeline: 's2s',
+    inputPricePerMillion: 2.1, outputPricePerMillion: 8.5,
+    languages: ['en-IN', 'hi-IN', 'bn-IN', 'ta-IN', 'te-IN', 'mr-IN', 'gu-IN', 'kn-IN', 'ml-IN'],
+    voices: ['Puck', 'Charon', 'Kore', 'Fenrir', 'Aoede', 'Leda', 'Orus', 'Zephyr'],
+  },
+  {
+    providerKey: 'google', key: 'gemini-2.5-flash-preview-native-audio-dialog', name: 'Gemini 2.5 Flash Native Audio', kind: 'voice',
+    voicePipeline: 's2s',
+    inputPricePerMillion: 3.0, outputPricePerMillion: 12.0,
+    languages: ['en-IN', 'hi-IN', 'bn-IN', 'ta-IN', 'te-IN', 'mr-IN', 'gu-IN', 'kn-IN', 'ml-IN'],
+    voices: ['Puck', 'Charon', 'Kore', 'Fenrir', 'Aoede', 'Leda', 'Orus', 'Zephyr'],
+  },
+  {
+    providerKey: 'google', key: 'gemini-3.1-flash-live-preview', name: 'Gemini 3.1 Flash Live (Preview)', kind: 'voice',
+    voicePipeline: 's2s',
+    inputPricePerMillion: 3.0, outputPricePerMillion: 12.0,
+    languages: ['en-IN', 'hi-IN', 'bn-IN', 'ta-IN', 'te-IN', 'mr-IN', 'gu-IN', 'kn-IN', 'ml-IN'],
+    voices: ['Puck', 'Charon', 'Kore', 'Fenrir', 'Aoede', 'Leda', 'Orus', 'Zephyr'],
+  },
+  // ── Anthropic chat ──
+  {
+    providerKey: 'anthropic', key: 'claude-sonnet-4-5', name: 'Claude Sonnet 4.5', kind: 'chat',
+    contextWindowTokens: 200_000, inputPricePerMillion: 3.0, outputPricePerMillion: 15.0,
+  },
+  {
+    providerKey: 'anthropic', key: 'claude-haiku-4-5', name: 'Claude Haiku 4.5', kind: 'chat',
+    contextWindowTokens: 200_000, inputPricePerMillion: 1.0, outputPricePerMillion: 5.0,
+  },
+  // ── Sarvam chat (OpenAI-compatible) ──
+  {
+    providerKey: 'sarvam', key: 'sarvam-m', name: 'Sarvam-M', kind: 'chat',
+    contextWindowTokens: 32_768,
+  },
+  // ── Sarvam voice (existing STT+TTS pipeline: Saarika STT + Bulbul TTS) ──
+  {
+    providerKey: 'sarvam', key: 'saarika-bulbul', name: 'Saarika v2.5 + Bulbul v2', kind: 'voice',
+    voicePipeline: 'stt+tts',
+    languages: SARVAM_LANGUAGES,
+    voices: ['shubh', 'priya', 'neha', 'rahul', 'pooja', 'rohan', 'kavya', 'amit'],
   },
 ];
+
+/** Legacy configured-provider `type` → master provider key. */
+const LEGACY_TYPE_TO_MASTER: Record<string, string> = {
+  openai: 'openai',
+  gemini: 'google',
+  anthropic: 'anthropic',
+  sarvam: 'sarvam',
+};
+
+/** Retired provider model ids → their replacements. Remapped in place so
+ *  existing configured rows (and personas pointing at them) keep working. */
+const RETIRED_MODEL_KEYS: Record<string, string> = {
+  'gpt-4o-realtime-preview': 'gpt-realtime',
+  'gpt-4o-mini-realtime-preview': 'gpt-realtime-mini',
+};
 
 async function main() {
-  const providerIdByName = new Map<string, number>();
-  for (const p of PROVIDERS) {
-    // No credentialRef — the API key is added later in the UI (BYOK).
-    const provider = await prisma.llmProvider.upsert({
-      where: { name: p.name },
-      update: { type: p.type, priority: p.priority },
-      create: { name: p.name, type: p.type, priority: p.priority, isEnabled: true },
+  // 0. Remap retired model keys BEFORE upserting, so the upsert updates the
+  //    renamed row instead of creating a duplicate. Configured llm_models rows
+  //    carry the provider model id in `name` — rename those too.
+  for (const [oldKey, newKey] of Object.entries(RETIRED_MODEL_KEYS)) {
+    const renamedMasters = await prisma.masterModel.updateMany({
+      where: { key: oldKey },
+      data: { key: newKey },
     });
-    providerIdByName.set(p.name, provider.id);
+    const renamedConfigured = await prisma.llmModel.updateMany({
+      where: { name: oldKey },
+      data: { name: newKey },
+    });
+    if (renamedMasters.count > 0 || renamedConfigured.count > 0) {
+      console.log(`Remapped retired model ${oldKey} → ${newKey}`);
+    }
   }
 
-  for (const m of MODELS) {
-    const providerId = providerIdByName.get(m.providerName);
-    if (providerId == null) throw new Error(`Unknown provider: ${m.providerName}`);
-    await prisma.llmModel.upsert({
-      where: { name: m.name },
+  // 1. Masters (upsert by key — re-running refreshes the catalog).
+  const providerIdByKey = new Map<string, number>();
+  for (const p of MASTER_PROVIDERS) {
+    const row = await prisma.masterProvider.upsert({
+      where: { key: p.key },
       update: {
-        providerId,
-        capabilities: m.capabilities,
-        contextWindowTokens: m.contextWindowTokens,
-        inputPricePerMillion: m.inputPricePerMillion,
-        outputPricePerMillion: m.outputPricePerMillion,
-        isDefault: m.isDefault ?? false,
+        name: p.name,
+        adapterType: p.adapterType,
+        defaultBaseUrl: p.defaultBaseUrl ?? null,
+        supports: p.supports,
       },
       create: {
-        name: m.name,
-        providerId,
-        capabilities: m.capabilities,
-        contextWindowTokens: m.contextWindowTokens,
-        inputPricePerMillion: m.inputPricePerMillion,
-        outputPricePerMillion: m.outputPricePerMillion,
-        isDefault: m.isDefault ?? false,
+        key: p.key,
+        name: p.name,
+        adapterType: p.adapterType,
+        defaultBaseUrl: p.defaultBaseUrl ?? null,
+        supports: p.supports,
       },
     });
+    providerIdByKey.set(p.key, row.id);
   }
 
-  // Exactly one default model (last write wins if multiple flagged).
-  const defaults = MODELS.filter((m) => m.isDefault).map((m) => m.name);
-  if (defaults.length > 0) {
-    await prisma.llmModel.updateMany({
-      where: { name: { notIn: defaults } },
-      data: { isDefault: false },
+  const modelIdByKey = new Map<string, number>();
+  for (const m of MASTER_MODELS) {
+    const masterProviderId = providerIdByKey.get(m.providerKey);
+    if (masterProviderId == null) throw new Error(`Unknown master provider: ${m.providerKey}`);
+    const data = {
+      name: m.name,
+      kind: m.kind,
+      contextWindowTokens: m.contextWindowTokens ?? null,
+      inputPricePerMillion: m.inputPricePerMillion ?? null,
+      outputPricePerMillion: m.outputPricePerMillion ?? null,
+      voicePipeline: m.voicePipeline ?? null,
+      languages: m.languages ?? [],
+      voices: m.voices ?? [],
+    };
+    const row = await prisma.masterModel.upsert({
+      where: { masterProviderId_key: { masterProviderId, key: m.key } },
+      update: data,
+      create: { masterProviderId, key: m.key, ...data },
     });
+    modelIdByKey.set(`${m.providerKey}/${m.key}`, row.id);
   }
 
-  console.log('LLM registry seeded (no keys — add them in the UI):');
-  console.log(`  Providers : ${PROVIDERS.map((p) => p.name).join(', ')}`);
-  console.log(`  Models    : ${MODELS.map((m) => m.name).join(', ')}`);
-  console.log(`  Default   : ${defaults.join(', ') || '(none)'}`);
+  // 2. Backfill: link legacy configured rows to their masters (best-effort).
+  let linkedProviders = 0;
+  let linkedModels = 0;
+  const legacyProviders = await prisma.llmProvider.findMany({
+    where: { masterProviderId: null },
+    include: { models: true },
+  });
+  for (const lp of legacyProviders) {
+    const masterKey = LEGACY_TYPE_TO_MASTER[lp.type];
+    const masterProviderId = masterKey ? providerIdByKey.get(masterKey) : undefined;
+    if (masterProviderId == null) continue; // custom/unknown type stays legacy
+    await prisma.llmProvider.update({
+      where: { id: lp.id },
+      data: { masterProviderId },
+    });
+    linkedProviders++;
+    for (const lm of lp.models) {
+      const masterModelId = modelIdByKey.get(`${masterKey}/${lm.name}`);
+      if (masterModelId == null) continue; // unknown model name stays legacy
+      await prisma.llmModel.update({
+        where: { id: lm.id },
+        data: { masterModelId, kind: 'chat' },
+      });
+      linkedModels++;
+    }
+  }
+
+  const chatCount = MASTER_MODELS.filter((m) => m.kind === 'chat').length;
+  const voiceCount = MASTER_MODELS.filter((m) => m.kind === 'voice').length;
+  console.log('Master catalog seeded:');
+  console.log(`  Providers    : ${MASTER_PROVIDERS.map((p) => p.name).join(', ')}`);
+  console.log(`  Chat models  : ${chatCount}, Voice models: ${voiceCount}`);
+  console.log(`  Backfilled   : ${linkedProviders} provider(s), ${linkedModels} model(s) linked to masters`);
 }
 
 main()

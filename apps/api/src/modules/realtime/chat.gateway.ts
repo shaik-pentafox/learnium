@@ -23,8 +23,8 @@ import {
 import { ScoringService } from '../../core/llm/scoring.service';
 import { UsageService } from '../../core/llm/usage.service';
 import { LlmFlowLogger, previewText } from '../../core/llm/llm-flow.logger';
-import { VOICE_PROVIDER, type VoiceProvider } from '../../core/voice/voice-provider';
-import { VoiceTurnManager } from '../../core/voice/voice-turn.manager';
+import { VoiceModelFactory } from '../../core/voice/voice-model-factory.service';
+import type { S2SCallbacks } from '../../core/voice/voice-manager';
 import { SessionRegistry, type WsClient } from './session-registry';
 
 const END_SENTINEL = '[CONVERSATION_ENDED]';
@@ -44,7 +44,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     private readonly usage: UsageService,
     private readonly flowLog: LlmFlowLogger,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
-    @Inject(VOICE_PROVIDER) private readonly voiceProvider: VoiceProvider,
+    private readonly voiceFactory: VoiceModelFactory,
   ) {}
 
   async handleConnection(client: WebSocket, req: IncomingMessage): Promise<void> {
@@ -76,6 +76,8 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
             systemPrompt: true,
             conversationModelId: true,
             languages: true,
+            voiceModelId: true,
+            voiceId: true,
             voiceStyle: { select: { voiceId: true } },
           },
         },
@@ -170,10 +172,27 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     wsClient.modelName = resolvedModelName;
     wsClient.providerType = resolvedProviderType;
     wsClient.lastTurnAt = Date.now();
-    wsClient.personaLanguages = session.persona.languages;
-    wsClient.personaVoiceId = session.persona.voiceStyle?.voiceId ?? null;
+    // Persona voice: new voiceId column wins; legacy voiceStyle is the fallback.
+    wsClient.personaVoiceId =
+      session.persona.voiceId ?? session.persona.voiceStyle?.voiceId ?? null;
+    wsClient.personaVoiceModelId = session.persona.voiceModelId;
     wsClient.systemPromptHolder = systemPromptHolder;
     wsClient.baseSystemPrompt = baseSystemPrompt;
+
+    // Voice availability: persona.languages ∩ the resolved voice model's languages.
+    // No usable voice model (none configured / provider disabled) → voice off.
+    let personaLanguages: string[] = [];
+    if (session.persona.languages.length > 0) {
+      try {
+        const voiceModel = await this.voiceFactory.resolve(session.persona.voiceModelId);
+        personaLanguages = session.persona.languages.filter((l) =>
+          voiceModel.languages.includes(l),
+        );
+      } catch {
+        personaLanguages = [];
+      }
+    }
+    wsClient.personaLanguages = personaLanguages;
 
     // hasStarted lets the client show the start-confirm dialog only on a genuine
     // first join — never again after a reconnect, where messages already exist.
@@ -188,7 +207,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       personaColor: session.persona.color ?? null,
       systemPrompt: baseSystemPrompt,
       hasStarted: messageCount > 0,
-      personaLanguages: session.persona.languages,
+      personaLanguages,
     });
 
     client.on('message', (raw: RawData, isBinary: boolean) =>
@@ -490,20 +509,40 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       return;
     }
 
-    const langs = wsClient.personaLanguages ?? [];
-    if (langs.length > 0 && !langs.includes(languageCode)) {
+    // Resolve the persona's voice model (or the primary) from the registry.
+    let resolved;
+    try {
+      resolved = await this.voiceFactory.resolve(wsClient.personaVoiceModelId);
+    } catch {
       this.sendError(
         client,
-        'INVALID_LANGUAGE',
-        `Language ${languageCode} not configured for this persona`,
+        'VOICE_NOT_CONFIGURED',
+        'No voice model configured. Admin must add one via /llm.',
       );
       return;
     }
 
-    const voiceId =
+    const langs = wsClient.personaLanguages ?? [];
+    const allowed = langs.length > 0 ? langs : resolved.languages;
+    if (!allowed.includes(languageCode)) {
+      this.sendError(
+        client,
+        'INVALID_LANGUAGE',
+        `Language ${languageCode} not available for this persona's voice model`,
+      );
+      return;
+    }
+
+    // Voice preference: explicit frame > persona voiceStyle (if the model knows
+    // it) > the model's first catalog voice.
+    const requested =
       typeof frame['voiceId'] === 'string' && frame['voiceId']
         ? frame['voiceId']
-        : (wsClient.personaVoiceId ?? 'priya');
+        : wsClient.personaVoiceId;
+    const voiceId =
+      requested && resolved.voices.includes(requested)
+        ? requested
+        : (resolved.voices[0] ?? 'alloy');
 
     if (wsClient.voiceTurn) {
       await wsClient.voiceTurn.destroy();
@@ -515,57 +554,148 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       data: { isVoice: true, languageCode },
     });
 
+    const instructions =
+      (wsClient.baseSystemPrompt ?? '') + this.languageInstruction(languageCode);
+    // stt+tts runs through the graph — swap the live prompt for language pinning.
+    // S2S managers get `instructions` directly and never touch the graph.
     if (wsClient.systemPromptHolder && wsClient.baseSystemPrompt) {
-      wsClient.systemPromptHolder.active =
-        wsClient.baseSystemPrompt + this.languageInstruction(languageCode);
+      wsClient.systemPromptHolder.active = instructions;
     }
 
-    const manager = new VoiceTurnManager({
-      provider: this.voiceProvider,
+    const sendJson = (payload: unknown) => this.send(client, payload);
+    const sendBinary = (buf: Buffer) => {
+      if (client.readyState === WebSocket.OPEN) client.send(buf);
+    };
+
+    const manager = this.voiceFactory.createManager(resolved, {
       languageCode,
       voiceId,
-      sendJson: (payload) => this.send(client, payload),
-      sendBinary: (buf) => {
-        if (client.readyState === WebSocket.OPEN) client.send(buf);
-      },
-      onFinalTranscript: async (text) => {
-        await this.runAssistantTurn(client, wsClient, text, {
-          persistUser: true,
-          onTokenDelta: (d) => manager.onTokenDelta(d),
-          onStreamEnd: () => manager.onStreamEnd(),
-        });
-      },
-      onSttUsage: (chars, latencyMs) => {
-        void this.usage.record({
-          kind: 'stt',
-          modelName: 'sarvam-saarika-v2',
-          providerType: 'sarvam',
-          sessionId: wsClient.sessionDbId ?? null,
-          userId: wsClient.userId,
-          inputTokens: chars,
-          outputTokens: 0,
-          estimated: true,
-          latencyMs,
-        });
-      },
-      onTtsUsage: (chars, latencyMs) => {
-        void this.usage.record({
-          kind: 'tts',
-          modelName: 'sarvam-bulbul-v2',
-          providerType: 'sarvam',
-          sessionId: wsClient.sessionDbId ?? null,
-          userId: wsClient.userId,
-          inputTokens: 0,
-          outputTokens: chars,
-          estimated: true,
-          latencyMs,
-        });
+      instructions,
+      s2s: this.buildS2SCallbacks(client, wsClient, resolved, sendJson, sendBinary),
+      sttTts: {
+        sendJson,
+        sendBinary,
+        onFinalTranscript: async (text) => {
+          await this.runAssistantTurn(client, wsClient, text, {
+            persistUser: true,
+            onTokenDelta: (d) => wsClient.voiceTurn?.onTokenDelta?.(d),
+            onStreamEnd: () => wsClient.voiceTurn?.onStreamEnd?.(),
+          });
+        },
+        onSttUsage: (chars, latencyMs) => {
+          void this.usage.record({
+            kind: 'stt',
+            modelName: resolved.modelName,
+            providerType: resolved.providerType,
+            sessionId: wsClient.sessionDbId ?? null,
+            userId: wsClient.userId,
+            inputTokens: chars,
+            outputTokens: 0,
+            estimated: true,
+            latencyMs,
+          });
+        },
+        onTtsUsage: (chars, latencyMs) => {
+          void this.usage.record({
+            kind: 'tts',
+            modelName: resolved.modelName,
+            providerType: resolved.providerType,
+            sessionId: wsClient.sessionDbId ?? null,
+            userId: wsClient.userId,
+            inputTokens: 0,
+            outputTokens: chars,
+            estimated: true,
+            latencyMs,
+          });
+        },
       },
     });
 
     wsClient.voiceTurn = manager;
-    await manager.startListening();
+    try {
+      await manager.start();
+    } catch (err) {
+      this.logger.error({ err }, 'Voice manager start failed');
+      delete wsClient.voiceTurn;
+      this.sendError(client, 'VOICE_START_FAILED', 'Could not connect to the voice model');
+      return;
+    }
     this.send(client, { type: 'voice_started', languageCode, voiceId });
+  }
+
+  /** Side effects for native S2S managers: persistence, telemetry, session end.
+   *  Keeps ChatMessages flowing exactly like text turns so scoring is unchanged. */
+  private buildS2SCallbacks(
+    client: WebSocket,
+    wsClient: WsClient,
+    resolved: { modelId: number; modelName: string; providerType: string },
+    sendJson: (payload: unknown) => void,
+    sendBinary: (buf: Buffer) => void,
+  ): S2SCallbacks {
+    return {
+      sendJson,
+      sendBinary,
+      onUserTranscript: (text) => {
+        const responseMs = wsClient.lastTurnAt ? Date.now() - wsClient.lastTurnAt : null;
+        void this.prisma.chatMessage
+          .create({
+            data: {
+              sessionId: wsClient.sessionDbId!,
+              role: 'user',
+              content: text,
+              latencyMs: responseMs,
+            },
+          })
+          .then(() => {
+            wsClient.lastTurnAt = Date.now();
+          })
+          .catch((err) => this.logger.error({ err }, 'Voice user transcript persist failed'));
+      },
+      onAssistantTranscript: (text, latencyMs) => {
+        void this.prisma.chatMessage
+          .create({
+            data: {
+              sessionId: wsClient.sessionDbId!,
+              role: 'assistant',
+              content: text,
+              latencyMs,
+            },
+          })
+          .then((saved) => {
+            wsClient.lastTurnAt = Date.now();
+            this.send(client, {
+              type: 'message_done',
+              messageId: String(saved.id),
+              emotion: null,
+              emoji: null,
+            });
+          })
+          .catch((err) =>
+            this.logger.error({ err }, 'Voice assistant transcript persist failed'),
+          );
+      },
+      onConversationEnded: () => {
+        void this.endSession(client);
+      },
+      onUsage: ({ inputTokens, outputTokens, latencyMs }) => {
+        void this.usage.record({
+          kind: 'voice',
+          modelId: resolved.modelId,
+          modelName: resolved.modelName,
+          providerType: resolved.providerType,
+          sessionId: wsClient.sessionDbId ?? null,
+          userId: wsClient.userId,
+          inputTokens,
+          outputTokens,
+          estimated: false,
+          latencyMs,
+        });
+      },
+      onError: (code, message) => {
+        this.sendError(client, code, message);
+        void this.stopVoice(client);
+      },
+    };
   }
 
   private async stopVoice(client: WebSocket): Promise<void> {
@@ -583,6 +713,14 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
   private async endSession(client: WebSocket): Promise<void> {
     const wsClient = this.registry.get(client);
     if (!wsClient?.sessionUid || !wsClient.sessionDbId) return;
+
+    // Kill any live voice pipeline first — otherwise the S2S upstream keeps
+    // streaming audio while (and after) the session is being scored.
+    if (wsClient.voiceTurn) {
+      await wsClient.voiceTurn.destroy();
+      delete wsClient.voiceTurn;
+      this.send(client, { type: 'voice_stopped' });
+    }
 
     this.send(client, { type: 'session_ending' });
 

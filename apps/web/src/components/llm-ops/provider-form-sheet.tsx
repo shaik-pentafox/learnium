@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Dialog,
   DialogContent,
@@ -23,12 +23,10 @@ import { notify } from '@/lib/toast'
 import {
   createProvider,
   updateProvider,
+  listMasterProviders,
   llmKeys,
   type LlmProvider,
-  type ProviderInput,
 } from '@/services/llm'
-
-const PROVIDER_TYPES = ['openai', 'gemini', 'azure', 'anthropic', 'custom'] as const
 
 interface ProviderFormSheetProps {
   open: boolean
@@ -38,23 +36,21 @@ interface ProviderFormSheetProps {
 }
 
 interface FormState {
+  masterProviderId: string
   name: string
-  type: string
   baseUrl: string
   apiKey: string
   isEnabled: boolean
-  priority: string
   monthlyBudgetUsd: string
 }
 
 function initialState(provider: LlmProvider | null): FormState {
   return {
+    masterProviderId: provider?.masterProviderId != null ? String(provider.masterProviderId) : '',
     name: provider?.name ?? '',
-    type: provider?.type ?? 'openai',
     baseUrl: provider?.baseUrl ?? '',
     apiKey: '', // write-only — never prefilled, even on edit
     isEnabled: provider?.isEnabled ?? true,
-    priority: String(provider?.priority ?? 0),
     monthlyBudgetUsd:
       provider?.monthlyBudgetUsd != null ? String(provider.monthlyBudgetUsd) : '',
   }
@@ -69,6 +65,12 @@ export function ProviderFormSheet({
   const queryClient = useQueryClient()
   const [form, setForm] = useState<FormState>(() => initialState(provider))
 
+  const masters = useQuery({
+    queryKey: llmKeys.masterProviders(),
+    queryFn: listMasterProviders,
+    enabled: open && !isEdit,
+  })
+
   // Re-seed fields on the closed→open transition (create vs. a specific
   // provider). Render-phase reset avoids an effect + cascading render.
   const [wasOpen, setWasOpen] = useState(false)
@@ -80,31 +82,45 @@ export function ProviderFormSheet({
   }
 
   const mutation = useMutation({
-    mutationFn: (input: ProviderInput) =>
-      isEdit ? updateProvider(provider.id, input) : createProvider(input),
+    mutationFn: () =>
+      isEdit
+        ? updateProvider(provider.id, {
+            name: form.name,
+            baseUrl: form.baseUrl,
+            apiKey: form.apiKey,
+            isEnabled: form.isEnabled,
+            monthlyBudgetUsd: form.monthlyBudgetUsd ? Number(form.monthlyBudgetUsd) : null,
+          })
+        : createProvider({
+            masterProviderId: Number(form.masterProviderId),
+            apiKey: form.apiKey,
+            name: form.name,
+            baseUrl: form.baseUrl,
+            isEnabled: form.isEnabled,
+            monthlyBudgetUsd: form.monthlyBudgetUsd ? Number(form.monthlyBudgetUsd) : null,
+          }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: llmKeys.providers() })
       queryClient.invalidateQueries({ queryKey: llmKeys.models() })
+      queryClient.invalidateQueries({ queryKey: llmKeys.masterProviders() })
       notify.success(isEdit ? 'Provider updated' : 'Provider added')
       onOpenChange(false)
     },
+    onError: (err) => notify.error(err),
   })
 
   function set<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm((prev) => ({ ...prev, [key]: value }))
   }
 
+  const selectedMaster = masters.data?.find(
+    (m) => String(m.id) === form.masterProviderId,
+  )
+
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
-    mutation.mutate({
-      name: form.name,
-      type: form.type,
-      baseUrl: form.baseUrl,
-      apiKey: form.apiKey,
-      isEnabled: form.isEnabled,
-      priority: Number(form.priority) || 0,
-      monthlyBudgetUsd: form.monthlyBudgetUsd ? Number(form.monthlyBudgetUsd) : null,
-    })
+    if (!isEdit && !form.masterProviderId) return
+    mutation.mutate()
   }
 
   return (
@@ -122,8 +138,8 @@ export function ProviderFormSheet({
           <DialogTitle>{isEdit ? 'Edit provider' : 'Add provider'}</DialogTitle>
           <DialogDescription>
             {isEdit
-              ? 'Update routing and credentials for this provider.'
-              : 'Register an LLM provider. The API key is encrypted and never shown again.'}
+              ? 'Rename, rotate the API key, or adjust the budget.'
+              : 'Pick a provider from the catalog and add your API key. The key is encrypted and never shown again.'}
           </DialogDescription>
         </DialogHeader>
 
@@ -131,28 +147,59 @@ export function ProviderFormSheet({
           onSubmit={handleSubmit}
           className="flex max-h-[70vh] flex-col gap-4 overflow-y-auto"
         >
-          <Field label="Name">
+          {!isEdit && (
+            <Field label="Provider">
+              <Select
+                value={form.masterProviderId}
+                onValueChange={(v) => set('masterProviderId', v)}
+              >
+                <SelectTrigger>
+                  <SelectValue
+                    placeholder={masters.isPending ? 'Loading…' : 'Select a provider'}
+                  />
+                </SelectTrigger>
+                <SelectContent>
+                  {(masters.data ?? []).map((m) => (
+                    <SelectItem key={m.id} value={String(m.id)}>
+                      <span>{m.name}</span>
+                      <span className="ml-2 text-xs text-muted-foreground">
+                        {m.supports.join(' + ')}
+                        {m.configuredProviderIds.length > 0 && ' · configured'}
+                      </span>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </Field>
+          )}
+
+          <Field
+            label="Display name"
+            hint={isEdit ? undefined : 'Optional — defaults to the catalog name.'}
+          >
             <Input
               value={form.name}
               onChange={(e) => set('name', e.target.value)}
-              required
-              placeholder="OpenAI Production"
+              placeholder={selectedMaster?.name ?? 'OpenAI'}
+              required={isEdit}
             />
           </Field>
 
-          <Field label="Type">
-            <Select value={form.type} onValueChange={(v) => set('type', v)}>
-              <SelectTrigger>
-                <SelectValue placeholder="Select a type" />
-              </SelectTrigger>
-              <SelectContent>
-                {PROVIDER_TYPES.map((t) => (
-                  <SelectItem key={t} value={t}>
-                    {t}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+          <Field
+            label="API key"
+            hint={
+              isEdit
+                ? `Leave blank to keep the current key${provider.credentialHint ? ` (${provider.credentialHint})` : ''}.`
+                : 'Stored encrypted; shown only once.'
+            }
+          >
+            <PasswordInput
+              value={form.apiKey}
+              onChange={(e) => set('apiKey', e.target.value)}
+              autoComplete="off"
+              placeholder={isEdit ? (provider.credentialHint ?? '••••••••') : 'sk-…'}
+              required={!isEdit}
+            />
           </Field>
 
           <Field
@@ -163,46 +210,20 @@ export function ProviderFormSheet({
               value={form.baseUrl}
               onChange={(e) => set('baseUrl', e.target.value)}
               type="url"
-              placeholder="https://api.openai.com/v1"
+              placeholder={selectedMaster?.defaultBaseUrl ?? 'https://…'}
             />
           </Field>
 
-          <Field
-            label="API key"
-            hint={
-              isEdit
-                ? 'Leave blank to keep the current key.'
-                : 'Stored encrypted; shown only once.'
-            }
-          >
-            <PasswordInput
-              value={form.apiKey}
-              onChange={(e) => set('apiKey', e.target.value)}
-              autoComplete="off"
-              placeholder={isEdit ? '••••••••' : 'sk-…'}
+          <Field label="Monthly budget ($)" hint="Optional">
+            <NumberField
+              value={form.monthlyBudgetUsd}
+              onChange={(v) => set('monthlyBudgetUsd', v)}
+              min={0}
+              step={50}
+              placeholder="—"
+              aria-label="Monthly budget in USD"
             />
           </Field>
-
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="Priority">
-              <NumberField
-                value={form.priority}
-                onChange={(v) => set('priority', v)}
-                min={0}
-                aria-label="Priority"
-              />
-            </Field>
-            <Field label="Monthly budget ($)" hint="Optional">
-              <NumberField
-                value={form.monthlyBudgetUsd}
-                onChange={(v) => set('monthlyBudgetUsd', v)}
-                min={0}
-                step={50}
-                placeholder="—"
-                aria-label="Monthly budget in USD"
-              />
-            </Field>
-          </div>
 
           <label className="flex items-center gap-2 text-sm">
             <input
@@ -222,7 +243,10 @@ export function ProviderFormSheet({
             >
               Cancel
             </Button>
-            <Button type="submit" disabled={mutation.isPending}>
+            <Button
+              type="submit"
+              disabled={mutation.isPending || (!isEdit && !form.masterProviderId)}
+            >
               {mutation.isPending
                 ? 'Saving…'
                 : isEdit

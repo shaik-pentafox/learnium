@@ -180,6 +180,8 @@ export class PersonasService {
           ...(dto.color !== undefined ? { color: dto.color } : {}),
           isPublished: dto.isPublished ?? false,
           ...(dto.voiceStyleId !== undefined ? { voiceStyleId: dto.voiceStyleId } : {}),
+          ...(dto.voiceModelId !== undefined ? { voiceModelId: dto.voiceModelId } : {}),
+          ...(dto.voiceId !== undefined ? { voiceId: dto.voiceId } : {}),
           ...(dto.languages !== undefined ? { languages: dto.languages } : {}),
           ...(dto.conversationModelId !== undefined ? { conversationModelId: dto.conversationModelId } : {}),
           ...(dto.scoringModelId !== undefined ? { scoringModelId: dto.scoringModelId } : {}),
@@ -220,6 +222,8 @@ export class PersonasService {
       data.systemPrompt = renderSystemPrompt(personaData.template);
     }
     if ('voiceStyleId' in personaData) data.voiceStyleId = personaData.voiceStyleId ?? null;
+    if ('voiceModelId' in personaData) data.voiceModelId = personaData.voiceModelId ?? null;
+    if ('voiceId' in personaData) data.voiceId = personaData.voiceId ?? null;
     if (personaData.languages !== undefined) data.languages = personaData.languages;
     if ('conversationModelId' in personaData) data.conversationModelId = personaData.conversationModelId ?? null;
     if ('scoringModelId' in personaData) data.scoringModelId = personaData.scoringModelId ?? null;

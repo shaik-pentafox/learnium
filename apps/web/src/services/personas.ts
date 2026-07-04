@@ -65,8 +65,12 @@ export interface Persona {
   systemPrompt?: string | null
   conversationModelId?: number | null
   scoringModelId?: number | null
-  /** Selected TTS voice (FK to a VoiceStyle row). */
+  /** Selected TTS voice (FK to a VoiceStyle row) — legacy, superseded by voiceModelId. */
   voiceStyleId?: number | null
+  /** Voice model pin (kind='voice' registry row). Null = primary voice model. */
+  voiceModelId?: number | null
+  /** Provider voice name (e.g. 'alloy', 'Puck'). Null = model's first voice. */
+  voiceId?: string | null
   /** BCP-47 languages a trainee may pick for a voice session (e.g. ["hi-IN"]). */
   languages?: string[]
   scoreCriteria?: ScoreCriterion[]
@@ -108,8 +112,12 @@ export interface PersonaInput {
   /** null/undefined → the registry default model is used. */
   conversationModelId?: number | null
   scoringModelId?: number | null
-  /** Selected TTS voice (FK to a VoiceStyle row); null → no voice. */
+  /** Selected TTS voice (FK to a VoiceStyle row); null → no voice. Legacy. */
   voiceStyleId?: number | null
+  /** Voice model pin; null → primary voice model. */
+  voiceModelId?: number | null
+  /** Provider voice name; null → model's first voice. */
+  voiceId?: string | null
   /** BCP-47 languages offered for voice sessions. Empty → text-only. */
   languages?: string[]
   scoreCriteria: ScoreCriterionInput[]
@@ -123,6 +131,8 @@ interface PersonaPayload {
   conversationModelId?: number
   scoringModelId?: number
   voiceStyleId?: number
+  voiceModelId?: number
+  voiceId?: string
   languages?: string[]
   scoreCriteria?: ScoreCriterionInput[]
   isPublished?: boolean
@@ -185,6 +195,12 @@ export function buildPersonaPayload(
   }
   if (input.voiceStyleId != null) {
     payload.voiceStyleId = input.voiceStyleId
+  }
+  if (input.voiceModelId != null) {
+    payload.voiceModelId = input.voiceModelId
+  }
+  if (input.voiceId) {
+    payload.voiceId = input.voiceId
   }
   // Only send a non-empty language set; the API rejects malformed codes.
   if (input.languages?.length) {

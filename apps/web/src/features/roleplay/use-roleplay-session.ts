@@ -161,6 +161,10 @@ export function useRoleplaySession(sessionUid: string): RoleplaySession {
       case 'tts_meta':
         // Binary audio frame follows; handled by onAudio below.
         break
+      case 'tts_stop':
+        // Barge-in: the user spoke over the agent — kill playback now.
+        playerRef.current.stop()
+        break
       case 'reconnect':
       case 'pong':
         break
@@ -207,6 +211,11 @@ export function useRoleplaySession(sessionUid: string): RoleplaySession {
 
   const endSession = useCallback(() => {
     setEnding(true)
+    // Voice session: silence playback + release the mic immediately — the
+    // server also tears down its voice pipeline on `end`.
+    playerRef.current.stop()
+    setVoiceActive(false)
+    setSttCaption(null)
     channelRef.current?.send({ type: 'control', action: 'end' })
   }, [])
 

@@ -1,57 +1,47 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Plus, Pencil, Star } from 'lucide-react'
-import {
-  listModels,
-  promoteModel,
-  llmKeys,
-  type LlmModel,
-} from '@/services/llm'
+import { Plus, Star, MessageSquare, Mic } from 'lucide-react'
+import { listModels, promoteModel, llmKeys, type LlmModel } from '@/services/llm'
 import { notify } from '@/lib/toast'
 import { Button } from '@/components/ui/button'
 import { SettingsSection } from '@/components/settings/settings-section'
-import { ModelFormSheet } from '@/components/llm-ops/model-form-sheet'
+import { AddModelDialog } from '@/components/llm-ops/add-model-dialog'
 
 export function ModelsSection() {
   const queryClient = useQueryClient()
-  const models = useQuery({ queryKey: llmKeys.models(), queryFn: listModels })
-  const [editing, setEditing] = useState<{ model: LlmModel | null } | null>(null)
+  const models = useQuery({ queryKey: llmKeys.models(), queryFn: () => listModels() })
+  const [adding, setAdding] = useState(false)
 
   const promote = useMutation({
     mutationFn: (id: number) => promoteModel(id),
-    onSuccess: () => {
+    onSuccess: (r) => {
       queryClient.invalidateQueries({ queryKey: llmKeys.models() })
-      notify.success('Default model updated')
+      notify.success(`Primary ${r.kind} model updated`)
     },
+    onError: (err) => notify.error(err),
   })
 
   return (
     <SettingsSection
       id="models"
-      title="Model Master"
-      description="Register and route the models personas can use."
+      title="Models"
+      description="Registered models. One primary chat model + one primary voice model (may be different providers)."
       action={
-        <Button size="sm" onClick={() => setEditing({ model: null })}>
+        <Button size="sm" onClick={() => setAdding(true)}>
           <Plus />
           Add model
         </Button>
       }
     >
-      <ModelFormSheet
-        open={editing != null}
-        model={editing?.model ?? null}
-        onOpenChange={(open) => {
-          if (!open) setEditing(null)
-        }}
-      />
+      <AddModelDialog open={adding} onOpenChange={setAdding} />
 
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-border text-left text-xs text-muted-foreground">
               <Th>Model</Th>
+              <Th>Kind</Th>
               <Th>Provider</Th>
-              <Th>Capabilities</Th>
               <Th className="text-right">In / Out ($/1M)</Th>
               <Th className="text-right">Actions</Th>
             </tr>
@@ -82,7 +72,6 @@ export function ModelsSection() {
               <ModelRow
                 key={m.id}
                 model={m}
-                onEdit={() => setEditing({ model: m })}
                 onPromote={() => promote.mutate(m.id)}
                 promoting={promote.isPending && promote.variables === m.id}
               />
@@ -103,19 +92,18 @@ export function ModelsSection() {
 
 interface ModelRowProps {
   model: LlmModel
-  onEdit: () => void
   onPromote: () => void
   promoting: boolean
 }
 
-function ModelRow({ model, onEdit, onPromote, promoting }: ModelRowProps) {
+function ModelRow({ model, onPromote, promoting }: ModelRowProps) {
   return (
     <tr className="border-b border-border last:border-0">
       <td className="px-6 py-3">
         <span className="font-data">{model.name}</span>
         {model.isDefault && (
           <span className="ml-2 rounded bg-success-soft px-1.5 py-0.5 text-xs font-medium text-success">
-            default
+            primary {model.kind}
           </span>
         )}
         {model.contextWindowTokens != null && (
@@ -123,21 +111,17 @@ function ModelRow({ model, onEdit, onPromote, promoting }: ModelRowProps) {
             {(model.contextWindowTokens / 1000).toFixed(0)}k ctx
           </span>
         )}
+        {model.kind === 'voice' && model.masterModel?.voicePipeline && (
+          <span className="ml-2 text-xs text-muted-foreground">
+            {model.masterModel.voicePipeline}
+          </span>
+        )}
+      </td>
+      <td className="px-6 py-3">
+        <KindBadge kind={model.kind} />
       </td>
       <td className="px-6 py-3 text-muted-foreground">
         {model.provider?.name ?? `#${model.providerId}`}
-      </td>
-      <td className="px-6 py-3">
-        <div className="flex flex-wrap gap-1">
-          {model.capabilities.map((c) => (
-            <span
-              key={c}
-              className="rounded border border-border bg-muted px-1.5 py-0.5 text-xs"
-            >
-              {c}
-            </span>
-          ))}
-        </div>
       </td>
       <td className="px-6 py-3 text-right font-data tabular-nums text-muted-foreground">
         {fmtPrice(model.inputPricePerMillion)} / {fmtPrice(model.outputPricePerMillion)}
@@ -153,21 +137,23 @@ function ModelRow({ model, onEdit, onPromote, promoting }: ModelRowProps) {
               disabled={promoting}
             >
               <Star className="size-3.5" />
-              {promoting ? 'Setting…' : 'Set default'}
+              {promoting ? 'Setting…' : 'Set primary'}
             </Button>
           )}
-          <Button
-            variant="ghost"
-            size="icon"
-            className="size-7"
-            onClick={onEdit}
-            aria-label={`Edit ${model.name}`}
-          >
-            <Pencil className="size-3.5" />
-          </Button>
         </div>
       </td>
     </tr>
+  )
+}
+
+function KindBadge({ kind }: { kind: string }) {
+  const voice = kind === 'voice'
+  const Icon = voice ? Mic : MessageSquare
+  return (
+    <span className="inline-flex items-center gap-1 rounded border border-border bg-muted px-1.5 py-0.5 text-xs">
+      <Icon className="size-3" />
+      {kind}
+    </span>
   )
 }
 

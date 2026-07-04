@@ -2,7 +2,8 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../database/prisma.service';
 
-export type UsageKind = 'chat' | 'scoring' | 'stt' | 'tts';
+// 'voice' = native S2S models (audio tokens); 'stt'/'tts' = the split pipeline.
+export type UsageKind = 'chat' | 'scoring' | 'stt' | 'tts' | 'voice';
 
 export interface TokenUsage {
   inputTokens: number;

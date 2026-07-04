@@ -1,7 +1,17 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
-import { Plus, Trash2, Rocket, UserSquare2, MessagesSquare, Target } from 'lucide-react'
+import {
+  Plus,
+  Trash2,
+  Rocket,
+  UserSquare2,
+  MessagesSquare,
+  Target,
+  Play,
+  Square,
+  Loader2,
+} from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
@@ -21,7 +31,13 @@ import {
   DEFAULT_PERSONA_COLOR,
 } from '@/lib/persona-color'
 import { listModels, llmKeys } from '@/services/llm'
-import { listVoices, listVoiceLanguages, voiceKeys } from '@/services/voice'
+import {
+  listVoices,
+  listVoiceLanguages,
+  fetchVoicePreview,
+  voiceKeys,
+  type VoiceStyleOption,
+} from '@/services/voice'
 import { startSession } from '@/services/roleplay'
 import {
   createPersona,
@@ -129,23 +145,31 @@ export function PersonaBuilder({ persona }: { persona?: Persona }) {
     persona?.scoringModelId != null ? String(persona.scoringModelId) : '',
   )
   const [criteria, setCriteria] = useState<CriterionRow[]>(() => toRows(persona))
-  const [voiceStyleId, setVoiceStyleId] = useState<string>(
-    persona?.voiceStyleId != null ? String(persona.voiceStyleId) : '',
+  const [voiceModelId, setVoiceModelId] = useState<string>(
+    persona?.voiceModelId != null ? String(persona.voiceModelId) : '',
   )
+  const [voiceId, setVoiceId] = useState<string>(persona?.voiceId ?? '')
   const [languages, setLanguages] = useState<string[]>(persona?.languages ?? [])
 
   // Model pickers are Super-Admin only (GET /llm/models is llmops:read).
   const models = useQuery({
     queryKey: llmKeys.models(),
-    queryFn: listModels,
+    queryFn: () => listModels(),
     enabled: isAdmin,
   })
+  const chatModels = models.data?.filter((m) => m.kind === 'chat')
+  const voiceModels = models.data?.filter((m) => m.kind === 'voice')
 
-  // Voice catalog (voices + supported languages) for the voice section.
-  const voices = useQuery({ queryKey: voiceKeys.voices(), queryFn: listVoices })
+  // Languages + voices of the resolved voice model (the pin, or the primary) —
+  // the trainee may only pick from these at session start.
+  const pinnedVoiceModelId = voiceModelId ? Number(voiceModelId) : undefined
   const voiceLanguages = useQuery({
-    queryKey: voiceKeys.languages(),
-    queryFn: listVoiceLanguages,
+    queryKey: voiceKeys.languages(pinnedVoiceModelId),
+    queryFn: () => listVoiceLanguages(pinnedVoiceModelId),
+  })
+  const voiceOptions = useQuery({
+    queryKey: voiceKeys.voices(pinnedVoiceModelId),
+    queryFn: () => listVoices(pinnedVoiceModelId),
   })
 
   function toggleLanguage(code: string) {
@@ -166,7 +190,8 @@ export function PersonaBuilder({ persona }: { persona?: Persona }) {
       template,
       conversationModelId: conversationModelId ? Number(conversationModelId) : null,
       scoringModelId: scoringModelId ? Number(scoringModelId) : null,
-      voiceStyleId: voiceStyleId ? Number(voiceStyleId) : null,
+      voiceModelId: voiceModelId ? Number(voiceModelId) : null,
+      voiceId: voiceId || null,
       languages,
       scoreCriteria: criteria,
     }
@@ -499,11 +524,11 @@ export function PersonaBuilder({ persona }: { persona?: Persona }) {
         <div className="sticky top-2 space-y-6">
           {isAdmin && (
             <Section title="Model registry">
-              <Field label="Conversation engine" hint="Defaults to the registry default if unset.">
+              <Field label="Conversation engine" hint="Defaults to the primary chat model if unset.">
                 <ModelSelect
                   value={conversationModelId}
                   onChange={setConversationModelId}
-                  options={models.data}
+                  options={chatModels}
                   loading={models.isPending}
                 />
               </Field>
@@ -511,28 +536,46 @@ export function PersonaBuilder({ persona }: { persona?: Persona }) {
                 <ModelSelect
                   value={scoringModelId}
                   onChange={setScoringModelId}
-                  options={models.data}
+                  options={chatModels}
                   loading={models.isPending}
                 />
               </Field>
             </Section>
           )}
 
-          <Section title="Voice" hint="Used for voice sessions. Pick a voice and the languages a trainee may speak.">
-            <Field label="Voice" hint="The persona's spoken voice (TTS).">
-              <VoiceSelect
-                value={voiceStyleId}
-                onChange={setVoiceStyleId}
-                options={voices.data}
-                loading={voices.isPending}
-              />
-            </Field>
+          <Section title="Voice" hint="Used for voice sessions. Pick the languages a trainee may speak.">
+            {isAdmin && (
+              <Field label="Voice model" hint="Defaults to the primary voice model if unset.">
+                <ModelSelect
+                  value={voiceModelId}
+                  onChange={(v) => {
+                    setVoiceModelId(v)
+                    // Language/voice availability changes with the model — reset picks.
+                    setLanguages([])
+                    setVoiceId('')
+                  }}
+                  options={voiceModels}
+                  loading={models.isPending}
+                  defaultLabel="Primary voice model"
+                />
+              </Field>
+            )}
             <Field label="Languages" hint="Trainee picks one of these when starting a voice session. None → text-only.">
               <LanguageChips
                 selected={languages}
                 onToggle={toggleLanguage}
                 options={voiceLanguages.data}
                 loading={voiceLanguages.isPending}
+              />
+            </Field>
+            <Field label="Voice" hint="The persona's spoken voice. Press play to hear a sample.">
+              <VoicePicker
+                voices={voiceOptions.data}
+                loading={voiceOptions.isPending}
+                selected={voiceId}
+                onSelect={setVoiceId}
+                previewLanguage={languages[0] ?? 'en-IN'}
+                voiceModelId={pinnedVoiceModelId}
               />
             </Field>
           </Section>
@@ -615,19 +658,21 @@ function ModelSelect({
   onChange,
   options,
   loading,
+  defaultLabel = 'Registry default',
 }: {
   value: string
   onChange: (v: string) => void
   options: { id: number; name: string }[] | undefined
   loading: boolean
+  defaultLabel?: string
 }) {
   return (
     <Select value={value || 'default'} onValueChange={(v) => onChange(v === 'default' ? '' : v)}>
       <SelectTrigger>
-        <SelectValue placeholder={loading ? 'Loading…' : 'Registry default'} />
+        <SelectValue placeholder={loading ? 'Loading…' : defaultLabel} />
       </SelectTrigger>
       <SelectContent>
-        <SelectItem value="default">Registry default</SelectItem>
+        <SelectItem value="default">{defaultLabel}</SelectItem>
         {options?.map((m) => (
           <SelectItem key={m.id} value={String(m.id)}>
             {m.name}
@@ -638,31 +683,133 @@ function ModelSelect({
   )
 }
 
-function VoiceSelect({
-  value,
-  onChange,
-  options,
+/**
+ * Voice selector with inline audio previews. One shared <audio> element; the
+ * sample is fetched (and server-cached) on first play per voice+language.
+ * "Model default" = unset — the session uses the voice model's first voice.
+ */
+function VoicePicker({
+  voices,
   loading,
+  selected,
+  onSelect,
+  previewLanguage,
+  voiceModelId,
 }: {
-  value: string
-  onChange: (v: string) => void
-  options: { id: number; name: string }[] | undefined
+  voices: VoiceStyleOption[] | undefined
   loading: boolean
+  selected: string
+  onSelect: (voiceId: string) => void
+  previewLanguage: string
+  voiceModelId: number | undefined
 }) {
+  const [playingId, setPlayingId] = useState<string | null>(null)
+  const [loadingId, setLoadingId] = useState<string | null>(null)
+  const audioRef = useRef<HTMLAudioElement | null>(null)
+  const urlRef = useRef<string | null>(null)
+
+  // Stop playback + free the blob URL on unmount.
+  useEffect(() => {
+    return () => {
+      audioRef.current?.pause()
+      if (urlRef.current) URL.revokeObjectURL(urlRef.current)
+    }
+  }, [])
+
+  function stopPlayback() {
+    audioRef.current?.pause()
+    audioRef.current = null
+    if (urlRef.current) {
+      URL.revokeObjectURL(urlRef.current)
+      urlRef.current = null
+    }
+    setPlayingId(null)
+  }
+
+  async function togglePreview(voiceId: string) {
+    if (playingId === voiceId) {
+      stopPlayback()
+      return
+    }
+    stopPlayback()
+    setLoadingId(voiceId)
+    try {
+      const url = await fetchVoicePreview(voiceId, previewLanguage, voiceModelId)
+      urlRef.current = url
+      const audio = new Audio(url)
+      audioRef.current = audio
+      audio.onended = () => stopPlayback()
+      await audio.play()
+      setPlayingId(voiceId)
+    } catch {
+      notify.error('Preview unavailable for this voice')
+    } finally {
+      setLoadingId(null)
+    }
+  }
+
+  if (loading) return <p className="text-xs text-muted-foreground">Loading…</p>
+  if (!voices?.length)
+    return <p className="text-xs text-muted-foreground">No voices available.</p>
+
   return (
-    <Select value={value || 'none'} onValueChange={(v) => onChange(v === 'none' ? '' : v)}>
-      <SelectTrigger>
-        <SelectValue placeholder={loading ? 'Loading…' : 'No voice'} />
-      </SelectTrigger>
-      <SelectContent>
-        <SelectItem value="none">No voice</SelectItem>
-        {options?.map((v) => (
-          <SelectItem key={v.id} value={String(v.id)}>
-            {v.name}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
+    <div className="grid gap-1.5">
+      <button
+        type="button"
+        onClick={() => onSelect('')}
+        aria-pressed={selected === ''}
+        className={
+          selected === ''
+            ? 'flex items-center rounded-lg border border-primary bg-primary/5 px-3 py-2 text-left text-sm font-medium'
+            : 'flex items-center rounded-lg border border-border px-3 py-2 text-left text-sm text-muted-foreground transition-colors hover:border-primary/40'
+        }
+      >
+        Model default
+      </button>
+      {voices.map((v) => {
+        const active = selected === v.voiceId
+        return (
+          <div
+            key={v.voiceId}
+            className={
+              active
+                ? 'flex items-center gap-2 rounded-lg border border-primary bg-primary/5 px-3 py-1.5'
+                : 'flex items-center gap-2 rounded-lg border border-border px-3 py-1.5 transition-colors hover:border-primary/40'
+            }
+          >
+            <button
+              type="button"
+              onClick={() => onSelect(v.voiceId)}
+              aria-pressed={active}
+              className={
+                active
+                  ? 'flex-1 text-left text-sm font-medium capitalize'
+                  : 'flex-1 text-left text-sm capitalize text-muted-foreground'
+              }
+            >
+              {v.name}
+            </button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="size-7 shrink-0"
+              aria-label={playingId === v.voiceId ? `Stop ${v.name} sample` : `Play ${v.name} sample`}
+              onClick={() => void togglePreview(v.voiceId)}
+              disabled={loadingId !== null && loadingId !== v.voiceId}
+            >
+              {loadingId === v.voiceId ? (
+                <Loader2 className="size-3.5 animate-spin" />
+              ) : playingId === v.voiceId ? (
+                <Square className="size-3.5" />
+              ) : (
+                <Play className="size-3.5" />
+              )}
+            </Button>
+          </div>
+        )
+      })}
+    </div>
   )
 }
 

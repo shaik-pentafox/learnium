@@ -19,6 +19,7 @@ import {
   CreateModelDtoSchema,
   UpdateModelDtoSchema,
   ModelQueryDtoSchema,
+  MasterModelQueryDtoSchema,
   UsageCallsQueryDtoSchema,
 } from './dto/llm-ops.dto';
 
@@ -53,6 +54,22 @@ export class LlmOpsController {
     const result = UsageCallsQueryDtoSchema.safeParse(query);
     if (!result.success) throw new ValidationException('Invalid query', result.error.issues);
     return this.usage.calls(result.data);
+  }
+
+  // ── Master catalog (seeded, read-only) ───────────────────────────────────────
+
+  @Get('masters/providers')
+  @Permissions('llmops:read')
+  listMasterProviders() {
+    return this.llmOpsService.listMasterProviders();
+  }
+
+  @Get('masters/models')
+  @Permissions('llmops:read')
+  listMasterModels(@Query() query: unknown) {
+    const result = MasterModelQueryDtoSchema.safeParse(query);
+    if (!result.success) throw new ValidationException('Invalid query', result.error.issues);
+    return this.llmOpsService.listMasterModels(result.data);
   }
 
   // ── Providers ──────────────────────────────────────────────────────────────

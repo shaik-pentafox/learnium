@@ -1,14 +1,46 @@
 import { apiGet, apiPost, apiPatch } from '@/lib/api-client'
 import { queryKeys } from '@/lib/query-keys'
 
+export type ModelKind = 'chat' | 'voice'
+
+/** Seeded catalog entry the admin configures a provider FROM. */
+export interface MasterProvider {
+  id: number
+  key: string
+  name: string
+  adapterType: string
+  defaultBaseUrl?: string | null
+  supports: string[] // ['chat'] | ['chat','voice'] | ['voice']
+  /** Configured LlmProvider ids already created from this master. */
+  configuredProviderIds: number[]
+}
+
+/** Seeded catalog model (chat or voice) under a master provider. */
+export interface MasterModel {
+  id: number
+  masterProviderId: number
+  key: string
+  name: string
+  kind: ModelKind
+  contextWindowTokens?: number | null
+  inputPricePerMillion?: number | null
+  outputPricePerMillion?: number | null
+  voicePipeline?: string | null // 's2s' | 'stt+tts'
+  languages: string[]
+  voices: string[]
+}
+
 export interface LlmProvider {
   id: number
   name: string
   type: string
   baseUrl?: string | null
+  /** Masked API key for display, e.g. "sk-…abc4". */
+  credentialHint?: string | null
   isEnabled: boolean
-  priority: number
   monthlyBudgetUsd?: number | null
+  masterProviderId?: number | null
+  masterProvider?: Pick<MasterProvider, 'id' | 'key' | 'name' | 'adapterType' | 'supports'> | null
 }
 
 export interface LlmModel {
@@ -16,147 +48,124 @@ export interface LlmModel {
   name: string
   providerId: number
   provider?: { id: number; name: string }
+  kind: ModelKind
   capabilities: string[]
   contextWindowTokens?: number | null
   inputPricePerMillion?: number | null
   outputPricePerMillion?: number | null
   isDefault: boolean
+  masterModelId?: number | null
+  masterModel?: Pick<
+    MasterModel,
+    'id' | 'key' | 'name' | 'kind' | 'voicePipeline' | 'languages' | 'voices'
+  > | null
 }
 
-/** Form-shaped provider input. `apiKey` is write-only; blank means "don't change". */
-export interface ProviderInput {
-  name: string
-  type: string
-  baseUrl?: string | null
-  apiKey?: string
+/** GET /llm/masters/providers — the seeded catalog to configure from. */
+export async function listMasterProviders(): Promise<MasterProvider[]> {
+  return apiGet<MasterProvider[]>('/llm/masters/providers')
+}
+
+/** GET /llm/masters/models — master models addable for a configured provider. */
+export async function listMasterModels(
+  providerId: number,
+  kind?: ModelKind,
+): Promise<MasterModel[]> {
+  return apiGet<MasterModel[]>('/llm/masters/models', {
+    params: { providerId, ...(kind ? { kind } : {}) },
+  })
+}
+
+/** Create input: pick a master, supply the key. Name/baseUrl default from master. */
+export interface CreateProviderInput {
+  masterProviderId: number
+  apiKey: string
+  name?: string
+  baseUrl?: string
   isEnabled: boolean
-  priority: number
   monthlyBudgetUsd?: number | null
 }
 
-interface ProviderPayload {
-  name: string
-  type: string
-  isEnabled: boolean
-  priority: number
-  baseUrl?: string
+/** Update input: `apiKey` present = key rotation; master/type never change. */
+export interface UpdateProviderInput {
+  name?: string
+  baseUrl?: string | null
   apiKey?: string
-  monthlyBudgetUsd?: number
+  isEnabled?: boolean
+  monthlyBudgetUsd?: number | null
 }
 
-/**
- * Strip optional fields the API rejects as empty: blank `baseUrl`/`apiKey`
- * (zod `.url()`/`.min(1)`) and a non-positive `monthlyBudgetUsd` (zod
- * `.positive()`). Omitting beats sending '' or 0 — the schema would 400.
- */
-export function buildProviderPayload(input: ProviderInput): ProviderPayload {
-  const payload: ProviderPayload = {
-    name: input.name.trim(),
-    type: input.type.trim(),
-    isEnabled: input.isEnabled,
-    priority: input.priority,
-  }
-  const baseUrl = input.baseUrl?.trim()
-  if (baseUrl) payload.baseUrl = baseUrl
-  const apiKey = input.apiKey?.trim()
-  if (apiKey) payload.apiKey = apiKey
-  if (input.monthlyBudgetUsd != null && input.monthlyBudgetUsd > 0) {
-    payload.monthlyBudgetUsd = input.monthlyBudgetUsd
-  }
-  return payload
-}
-
-/** GET /llm/providers — provider registry (api keys never returned). */
+/** GET /llm/providers — configured providers (api keys never returned). */
 export async function listProviders(): Promise<LlmProvider[]> {
   return apiGet<LlmProvider[]>('/llm/providers')
 }
 
-/** POST /llm/providers — register a provider. */
+/** POST /llm/providers — configure a provider from a master + API key. */
 export async function createProvider(
-  input: ProviderInput,
+  input: CreateProviderInput,
 ): Promise<LlmProvider> {
-  return apiPost<LlmProvider>('/llm/providers', buildProviderPayload(input))
+  const payload: Record<string, unknown> = {
+    masterProviderId: input.masterProviderId,
+    apiKey: input.apiKey.trim(),
+    isEnabled: input.isEnabled,
+  }
+  const name = input.name?.trim()
+  if (name) payload['name'] = name
+  const baseUrl = input.baseUrl?.trim()
+  if (baseUrl) payload['baseUrl'] = baseUrl
+  if (input.monthlyBudgetUsd != null && input.monthlyBudgetUsd > 0) {
+    payload['monthlyBudgetUsd'] = input.monthlyBudgetUsd
+  }
+  return apiPost<LlmProvider>('/llm/providers', payload)
 }
 
-/** PATCH /llm/providers/:id — update routing/credentials. */
+/** PATCH /llm/providers/:id — rename, rotate key, toggle, budget. */
 export async function updateProvider(
   id: number,
-  input: ProviderInput,
+  input: UpdateProviderInput,
 ): Promise<LlmProvider> {
-  return apiPatch<LlmProvider>(
-    `/llm/providers/${id}`,
-    buildProviderPayload(input),
-  )
+  const payload: Record<string, unknown> = {}
+  const name = input.name?.trim()
+  if (name) payload['name'] = name
+  if ('baseUrl' in input) {
+    const baseUrl = input.baseUrl?.trim()
+    payload['baseUrl'] = baseUrl || null
+  }
+  const apiKey = input.apiKey?.trim()
+  if (apiKey) payload['apiKey'] = apiKey
+  if (input.isEnabled !== undefined) payload['isEnabled'] = input.isEnabled
+  if ('monthlyBudgetUsd' in input) {
+    payload['monthlyBudgetUsd'] =
+      input.monthlyBudgetUsd != null && input.monthlyBudgetUsd > 0
+        ? input.monthlyBudgetUsd
+        : null
+  }
+  return apiPatch<LlmProvider>(`/llm/providers/${id}`, payload)
 }
 
-/** GET /llm/models — model registry with provider info. */
-export async function listModels(): Promise<LlmModel[]> {
-  return apiGet<LlmModel[]>('/llm/models')
+/** GET /llm/models — configured models with provider + master info. */
+export async function listModels(kind?: ModelKind): Promise<LlmModel[]> {
+  return apiGet<LlmModel[]>('/llm/models', {
+    params: kind ? { kind } : {},
+  })
 }
 
-/** Form-shaped model input for the master registry. */
-export interface ModelInput {
-  name: string
+/** POST /llm/models — register a model by picking from the master catalog. */
+export async function createModel(input: {
   providerId: number
-  capabilities: string[]
-  contextWindowTokens?: number | null
-  inputPricePerMillion?: number | null
-  outputPricePerMillion?: number | null
-  isDefault: boolean
+  masterModelId: number
+  isDefault?: boolean
+}): Promise<LlmModel> {
+  return apiPost<LlmModel>('/llm/models', input)
 }
 
-interface ModelPayload {
-  name: string
-  providerId: number
-  capabilities: string[]
-  isDefault: boolean
-  contextWindowTokens?: number
-  inputPricePerMillion?: number
-  outputPricePerMillion?: number
-}
-
-/**
- * Strip optional fields the API rejects: a non-positive `contextWindowTokens`
- * (zod `.positive()`). Prices are `.nonnegative()` so 0 is valid — only an
- * unset (null) price is omitted.
- */
-export function buildModelPayload(input: ModelInput): ModelPayload {
-  const payload: ModelPayload = {
-    name: input.name.trim(),
-    providerId: input.providerId,
-    capabilities: input.capabilities,
-    isDefault: input.isDefault,
-  }
-  if (input.contextWindowTokens != null && input.contextWindowTokens > 0) {
-    payload.contextWindowTokens = input.contextWindowTokens
-  }
-  if (input.inputPricePerMillion != null) {
-    payload.inputPricePerMillion = input.inputPricePerMillion
-  }
-  if (input.outputPricePerMillion != null) {
-    payload.outputPricePerMillion = input.outputPricePerMillion
-  }
-  return payload
-}
-
-/** POST /llm/models — register a model in the master registry. */
-export async function createModel(input: ModelInput): Promise<LlmModel> {
-  return apiPost<LlmModel>('/llm/models', buildModelPayload(input))
-}
-
-/** PATCH /llm/models/:id — update a model. */
-export async function updateModel(
-  id: number,
-  input: ModelInput,
-): Promise<LlmModel> {
-  return apiPatch<LlmModel>(`/llm/models/${id}`, buildModelPayload(input))
-}
-
-/** POST /llm/models/:id/promote — make this the default (clears others). */
+/** POST /llm/models/:id/promote — make this the primary of ITS kind. */
 export async function promoteModel(
   id: number,
-): Promise<{ id: number; promoted: boolean }> {
-  return apiPost<{ id: number; promoted: boolean }>(`/llm/models/${id}/promote`)
+): Promise<{ id: number; promoted: boolean; kind: ModelKind }> {
+  return apiPost<{ id: number; promoted: boolean; kind: ModelKind }>(
+    `/llm/models/${id}/promote`,
+  )
 }
 
 // ── Usage telemetry ──────────────────────────────────────────────────────────
@@ -276,6 +285,9 @@ export async function listUsageCalls(
 export const llmKeys = {
   providers: () => [...queryKeys.llmOps, 'providers'] as const,
   models: () => [...queryKeys.llmOps, 'models'] as const,
+  masterProviders: () => [...queryKeys.llmOps, 'master-providers'] as const,
+  masterModels: (providerId: number, kind?: ModelKind) =>
+    [...queryKeys.llmOps, 'master-models', providerId, kind ?? 'all'] as const,
   usage: (params: UsageParams) => [...queryKeys.llmOps, 'usage', params] as const,
   usageCalls: (params: UsageCallsParams) =>
     [...queryKeys.llmOps, 'usage-calls', params] as const,

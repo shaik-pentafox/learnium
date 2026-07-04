@@ -99,17 +99,59 @@ model VoiceStyle {
 
 // ── LLM Registry ─────────────────────────────────────────────────────────────
 
+// Seeded catalog of providers the admin may configure. Admin picks one, supplies
+// an API key → a LlmProvider row is created linked back here. Updated by re-running
+// `npm run seed:llm` (upsert by `key`), never edited via the API.
+model MasterProvider {
+  id             Int           @id @default(autoincrement())
+  key            String        @unique // 'openai' | 'google' | 'anthropic' | 'sarvam'
+  name           String // display: "OpenAI", "Google Gemini", ...
+  // Runtime construct branch (model factory / voice factory dispatch).
+  adapterType    String // 'openai' | 'gemini' | 'anthropic' | 'sarvam'
+  defaultBaseUrl String?
+  supports       String[] // ['chat'] | ['chat','voice'] | ['voice']
+  models         MasterModel[]
+  configured     LlmProvider[]
+
+  @@map("master_providers")
+}
+
+// Seeded catalog of models per master provider (chat + voice). Chat rows carry
+// pricing/context metadata; voice rows carry pipeline/languages/voices.
+model MasterModel {
+  id                    Int            @id @default(autoincrement())
+  masterProviderId      Int
+  masterProvider        MasterProvider @relation(fields: [masterProviderId], references: [id])
+  key                   String // provider model id: 'gpt-4o-mini', 'gpt-4o-realtime-preview'
+  name                  String // display
+  kind                  String // 'chat' | 'voice'
+  contextWindowTokens   Int? // chat
+  inputPricePerMillion  Float? // chat
+  outputPricePerMillion Float? // chat
+  voicePipeline         String? // voice: 's2s' | 'stt+tts'
+  languages             String[] // voice: BCP-47 codes
+  voices                String[] // voice: provider voice ids
+  configured            LlmModel[]
+
+  @@unique([masterProviderId, key])
+  @@map("master_models")
+}
+
 model LlmProvider {
-  id               Int        @id @default(autoincrement())
-  name             String     @unique
+  id               Int             @id @default(autoincrement())
+  name             String          @unique
   type             String
   baseUrl          String?
   credentialRef    String?
-  isEnabled        Boolean    @default(true)
-  priority         Int        @default(0)
+  // Masked key for display ("sk-…abc4") — computed on write, safe to return.
+  credentialHint   String?
+  isEnabled        Boolean         @default(true)
   monthlyBudgetUsd Float?
-  createdAt        DateTime   @default(now())
-  updatedAt        DateTime   @updatedAt
+  // Master catalog link. Null = legacy/manually-created row (pre-masters).
+  masterProviderId Int?
+  masterProvider   MasterProvider? @relation(fields: [masterProviderId], references: [id])
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
   models           LlmModel[]
 
   @@map("llm_providers")
@@ -120,15 +162,23 @@ model LlmModel {
   name                  String       @unique
   providerId            Int
   provider              LlmProvider  @relation(fields: [providerId], references: [id])
+  // 'chat' | 'voice'. isDefault invariant is scoped per kind: exactly one
+  // primary chat model AND one primary voice model (may be different providers).
+  kind                  String       @default("chat")
   capabilities          String[]
   contextWindowTokens   Int?
   inputPricePerMillion  Float?
   outputPricePerMillion Float?
   isDefault             Boolean      @default(false)
+  // Master catalog link. Null = legacy row; voice metadata (pipeline, languages,
+  // voices) is always read from the master at runtime.
+  masterModelId         Int?
+  masterModel           MasterModel? @relation(fields: [masterModelId], references: [id])
   createdAt             DateTime     @default(now())
   updatedAt             DateTime     @updatedAt
   conversationPersonas  Persona[]    @relation("ConversationModel")
   scoringPersonas       Persona[]    @relation("ScoringModel")
+  voicePersonas         Persona[]    @relation("VoiceModel")
 
   @@map("llm_models")
 }
@@ -176,6 +226,12 @@ model Persona {
   conversationModel   LlmModel?        @relation("ConversationModel", fields: [conversationModelId], references: [id])
   scoringModelId      Int?
   scoringModel        LlmModel?        @relation("ScoringModel", fields: [scoringModelId], references: [id])
+  // Voice model pin (kind='voice'). Null = use the primary voice model.
+  voiceModelId        Int?
+  voiceModel          LlmModel?        @relation("VoiceModel", fields: [voiceModelId], references: [id])
+  // Provider voice name for the persona (e.g. 'alloy', 'Puck', 'priya').
+  // Must be one of the voice model's catalog voices. Null = model's first voice.
+  voiceId             String?
   isDeleted           Boolean          @default(false)
   createdById         Int?
   updatedById         Int?

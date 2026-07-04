@@ -1,5 +1,6 @@
 import { Logger } from '@nestjs/common';
 import type { VoiceProvider, SttStream } from './voice-provider';
+import type { IVoiceManager } from './voice-manager';
 import { SentenceChunker } from './sentence-chunker';
 
 export interface VoiceTurnManagerOptions {
@@ -23,7 +24,9 @@ type State = 'idle' | 'listening' | 'thinking' | 'speaking';
  * Instantiated by the gateway on `voice_start`; destroyed on `voice_stop` or disconnect.
  * Never holds a reference to the gateway — communicates via the callbacks in options.
  */
-export class VoiceTurnManager {
+export class VoiceTurnManager implements IVoiceManager {
+  readonly pipeline = 'stt+tts' as const;
+
   private readonly logger = new Logger(VoiceTurnManager.name);
 
   private state: State = 'idle';
@@ -35,6 +38,11 @@ export class VoiceTurnManager {
   private sttStartedAt = 0;
 
   constructor(private readonly opts: VoiceTurnManagerOptions) {}
+
+  /** IVoiceManager entrypoint — opens the STT stream. */
+  async start(): Promise<void> {
+    return this.startListening();
+  }
 
   async startListening(): Promise<void> {
     if (this.state !== 'idle') return;

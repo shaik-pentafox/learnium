@@ -44,13 +44,22 @@ const SARVAM_VOICES: VoiceDescriptor[] = [
 export class SarvamVoiceProvider implements VoiceProvider {
   readonly id = 'sarvam';
   private readonly logger = new Logger(SarvamVoiceProvider.name);
+  /** Registry-configured key (decrypted) — set by the VoiceModelFactory before use. */
+  private registryApiKey: string | null = null;
 
   constructor(private readonly config: ConfigService<Env, true>) {}
 
+  /** Prefer the registry key (BYOK via LLM Ops UI); env var is the legacy fallback. */
+  setApiKey(key: string): void {
+    this.registryApiKey = key;
+  }
+
   private apiKey(): string {
-    const key = this.config.get('SARVAM_API_KEY', { infer: true });
+    const key = this.registryApiKey ?? this.config.get('SARVAM_API_KEY', { infer: true });
     if (!key) {
-      throw new Error('SARVAM_API_KEY is not configured — voice is unavailable');
+      throw new Error(
+        'Sarvam API key is not configured (add the Sarvam provider in /llm) — voice is unavailable',
+      );
     }
     return key;
   }

@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import type { WebSocket } from 'ws';
 import type { RoleplayGraph } from '../../core/llm/roleplay-graph';
-import type { VoiceTurnManager } from '../../core/voice/voice-turn.manager';
+import type { IVoiceManager } from '../../core/voice/voice-manager';
 
 export interface WsClient {
   ws: WebSocket;
@@ -17,12 +17,14 @@ export interface WsClient {
   providerType?: string;
   /** Epoch ms of the last persisted message — used to time the next turn. */
   lastTurnAt?: number;
-  /** Voice: allowed BCP-47 codes from the persona (empty = voice disabled). */
+  /** Voice: allowed BCP-47 codes (voice model languages ∩ persona.languages). */
   personaLanguages?: string[];
-  /** Voice: persona's default Sarvam voiceId (null = none configured). */
+  /** Voice: persona's default voiceId (null = none configured). */
   personaVoiceId?: string | null;
-  /** Active voice turn manager for this connection (set on voice_start). */
-  voiceTurn?: VoiceTurnManager;
+  /** Voice: persona's pinned voice model id (null = use the primary voice model). */
+  personaVoiceModelId?: number | null;
+  /** Active voice manager for this connection (set on voice_start). */
+  voiceTurn?: IVoiceManager;
   /** Mutable holder so voice_start can swap the live system prompt without rebuilding the graph. */
   systemPromptHolder?: { active: string };
   /** Original (no-language) system prompt — restored on voice_stop. */
