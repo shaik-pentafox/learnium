@@ -1,8 +1,7 @@
-import { Controller, Get, Inject, Query, Res } from '@nestjs/common';
+import { Controller, Get, Query, Res } from '@nestjs/common';
 import type { FastifyReply } from 'fastify';
 import { PrismaService } from '../../core/database/prisma.service';
 import { ValidationException } from '../../core/errors/domain.errors';
-import { VOICE_PROVIDER, type VoiceProvider } from '../../core/voice/voice-provider';
 import { VoiceModelFactory } from '../../core/voice/voice-model-factory.service';
 import { VoicePreviewService } from '../../core/voice/voice-preview.service';
 
@@ -10,8 +9,8 @@ import { VoicePreviewService } from '../../core/voice/voice-preview.service';
  * Read-only catalog the persona builder uses for its voice section. Registry-
  * driven: languages/voices come from the resolved voice model's master entry
  * (a pinned `voiceModelId` or the primary voice model). Trainers hit this —
- * it needs no llmops permission. Legacy fallbacks keep pre-registry setups
- * working (env-configured Sarvam, `voice_styles` rows).
+ * it needs no llmops permission. The `voice_styles` fallback keeps pre-registry
+ * personas working.
  */
 @Controller('voice')
 export class VoiceController {
@@ -19,7 +18,6 @@ export class VoiceController {
     private readonly prisma: PrismaService,
     private readonly voiceFactory: VoiceModelFactory,
     private readonly previews: VoicePreviewService,
-    @Inject(VOICE_PROVIDER) private readonly voice: VoiceProvider,
   ) {}
 
   /** GET /voice/voices — selectable voices for the resolved voice model. */
@@ -56,8 +54,8 @@ export class VoiceController {
       );
       return { languages: resolved.languages };
     } catch {
-      // Legacy fallback: env-configured provider's static catalog.
-      return { languages: this.voice.supportedLanguages() };
+      // No voice model configured yet — empty catalog.
+      return { languages: [] as string[] };
     }
   }
 

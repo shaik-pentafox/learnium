@@ -90,7 +90,7 @@ model RealtimeTicket {
 model VoiceStyle {
   id       Int       @id @default(autoincrement())
   name     String    @unique
-  provider String    // sarvam | elevenlabs | azure | google
+  provider String    // legacy voice-style provider label (pre-registry)
   voiceId  String
   personas Persona[]
 
@@ -104,10 +104,10 @@ model VoiceStyle {
 // `npm run seed:llm` (upsert by `key`), never edited via the API.
 model MasterProvider {
   id             Int           @id @default(autoincrement())
-  key            String        @unique // 'openai' | 'google' | 'anthropic' | 'sarvam'
+  key            String        @unique // 'openai' | 'google' | 'anthropic'
   name           String // display: "OpenAI", "Google Gemini", ...
   // Runtime construct branch (model factory / voice factory dispatch).
-  adapterType    String // 'openai' | 'gemini' | 'anthropic' | 'sarvam'
+  adapterType    String // 'openai' | 'gemini' | 'anthropic'
   defaultBaseUrl String?
   supports       String[] // ['chat'] | ['chat','voice'] | ['voice']
   models         MasterModel[]

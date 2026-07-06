@@ -22,7 +22,7 @@ const prisma = new PrismaClient();
 interface SeedMasterProvider {
   key: string;
   name: string;
-  /** Runtime construct branch: 'openai' | 'gemini' | 'anthropic' | 'sarvam'. */
+  /** Runtime construct branch: 'openai' | 'gemini' | 'anthropic'. */
   adapterType: string;
   defaultBaseUrl?: string;
   supports: string[]; // ['chat'] | ['chat','voice'] | ['voice']
@@ -45,19 +45,6 @@ const MASTER_PROVIDERS: SeedMasterProvider[] = [
   { key: 'openai', name: 'OpenAI', adapterType: 'openai', supports: ['chat', 'voice'] },
   { key: 'google', name: 'Google Gemini', adapterType: 'gemini', supports: ['chat', 'voice'] },
   { key: 'anthropic', name: 'Anthropic', adapterType: 'anthropic', supports: ['chat'] },
-  {
-    key: 'sarvam',
-    name: 'Sarvam AI',
-    adapterType: 'sarvam',
-    defaultBaseUrl: 'https://api.sarvam.ai/v1',
-    supports: ['chat', 'voice'],
-  },
-];
-
-/** The 11 Indic languages Sarvam Saarika/Bulbul support (BCP-47). */
-const SARVAM_LANGUAGES = [
-  'bn-IN', 'en-IN', 'gu-IN', 'hi-IN', 'kn-IN', 'ml-IN',
-  'mr-IN', 'od-IN', 'pa-IN', 'ta-IN', 'te-IN',
 ];
 
 const MASTER_MODELS: SeedMasterModel[] = [
@@ -146,18 +133,6 @@ const MASTER_MODELS: SeedMasterModel[] = [
     providerKey: 'anthropic', key: 'claude-haiku-4-5', name: 'Claude Haiku 4.5', kind: 'chat',
     contextWindowTokens: 200_000, inputPricePerMillion: 1.0, outputPricePerMillion: 5.0,
   },
-  // ── Sarvam chat (OpenAI-compatible) ──
-  {
-    providerKey: 'sarvam', key: 'sarvam-m', name: 'Sarvam-M', kind: 'chat',
-    contextWindowTokens: 32_768,
-  },
-  // ── Sarvam voice (existing STT+TTS pipeline: Saarika STT + Bulbul TTS) ──
-  {
-    providerKey: 'sarvam', key: 'saarika-bulbul', name: 'Saarika v2.5 + Bulbul v2', kind: 'voice',
-    voicePipeline: 'stt+tts',
-    languages: SARVAM_LANGUAGES,
-    voices: ['shubh', 'priya', 'neha', 'rahul', 'pooja', 'rohan', 'kavya', 'amit'],
-  },
 ];
 
 /** Legacy configured-provider `type` → master provider key. */
@@ -165,7 +140,6 @@ const LEGACY_TYPE_TO_MASTER: Record<string, string> = {
   openai: 'openai',
   gemini: 'google',
   anthropic: 'anthropic',
-  sarvam: 'sarvam',
 };
 
 /** Retired provider model ids → their replacements. Remapped in place so

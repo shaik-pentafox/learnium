@@ -8,8 +8,6 @@ import type { Env } from '../config/env.schema';
 import type { IVoiceManager, S2SCallbacks } from './voice-manager';
 import { OpenAIRealtimeManager } from './managers/openai-realtime.manager';
 import { GeminiLiveManager } from './managers/gemini-live.manager';
-import { VoiceTurnManager, type VoiceTurnManagerOptions } from './voice-turn.manager';
-import { SarvamVoiceProvider } from './providers/sarvam.provider';
 
 /** A voice model resolved from the registry, ready for manager construction. */
 export interface ResolvedVoiceModel {
@@ -18,7 +16,6 @@ export interface ResolvedVoiceModel {
   modelName: string;
   providerType: string;
   adapterType: string;
-  pipeline: 's2s' | 'stt+tts';
   /** BCP-47 codes the model supports (from the master catalog). */
   languages: string[];
   /** Provider voice ids (from the master catalog). */
@@ -35,8 +32,6 @@ export interface CreateManagerArgs {
   instructions: string;
   /** Side-effect callbacks for S2S managers. */
   s2s: S2SCallbacks;
-  /** Options for the stt+tts pipeline (Sarvam) — everything but provider/language/voice. */
-  sttTts: Omit<VoiceTurnManagerOptions, 'provider' | 'languageCode' | 'voiceId'>;
 }
 
 /**
@@ -51,21 +46,34 @@ export class VoiceModelFactory {
   constructor(
     private readonly prisma: PrismaService,
     private readonly config: ConfigService<Env, true>,
-    private readonly sarvam: SarvamVoiceProvider,
   ) {}
 
-  /** Pinned voice model (persona.voiceModelId) or the primary voice model. */
+  /** Pinned voice model (persona.voiceModelId) or the primary voice model.
+   *  A pin whose provider was disabled/swapped falls back to the primary voice
+   *  model instead of hard-failing (registry-churn resilience). */
   async resolve(voiceModelId: number | null | undefined): Promise<ResolvedVoiceModel> {
-    const where = voiceModelId
-      ? { id: voiceModelId, kind: 'voice', provider: { isEnabled: true } }
-      : { isDefault: true, kind: 'voice', provider: { isEnabled: true } };
-    const model = await this.prisma.llmModel.findFirst({
-      where,
-      include: {
-        masterModel: true,
-        provider: { include: { masterProvider: { select: { adapterType: true } } } },
-      },
-    });
+    const include = {
+      masterModel: true,
+      provider: { include: { masterProvider: { select: { adapterType: true } } } },
+    };
+    let model = voiceModelId
+      ? await this.prisma.llmModel.findFirst({
+          where: { id: voiceModelId, kind: 'voice', provider: { isEnabled: true } },
+          include,
+        })
+      : null;
+    if (voiceModelId && (!model || !model.masterModel)) {
+      this.logger.warn(
+        `Pinned voice model ${voiceModelId} unavailable (disabled/removed) — falling back to primary`,
+      );
+      model = null;
+    }
+    if (!model) {
+      model = await this.prisma.llmModel.findFirst({
+        where: { isDefault: true, kind: 'voice', provider: { isEnabled: true } },
+        include,
+      });
+    }
     if (!model || !model.masterModel) {
       throw new DomainException(
         ErrorCode.PROVIDER_UNAVAILABLE,
@@ -85,7 +93,6 @@ export class VoiceModelFactory {
       providerType: model.provider.type,
       adapterType:
         model.provider.masterProvider?.adapterType ?? model.provider.type,
-      pipeline: (model.masterModel.voicePipeline ?? 'stt+tts') as 's2s' | 'stt+tts',
       languages: model.masterModel.languages,
       voices: model.masterModel.voices,
       apiKey,
@@ -113,16 +120,6 @@ export class VoiceModelFactory {
           voiceId: args.voiceId,
           callbacks: args.s2s,
         });
-      case 'sarvam': {
-        // Registry key wins; SARVAM_API_KEY env remains the legacy fallback.
-        if (resolved.apiKey) this.sarvam.setApiKey(resolved.apiKey);
-        return new VoiceTurnManager({
-          provider: this.sarvam,
-          languageCode: args.languageCode,
-          voiceId: args.voiceId,
-          ...args.sttTts,
-        });
-      }
       default:
         throw new DomainException(
           ErrorCode.PROVIDER_UNAVAILABLE,

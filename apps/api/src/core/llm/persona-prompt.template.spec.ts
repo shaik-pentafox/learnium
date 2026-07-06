@@ -2,10 +2,10 @@ import { describe, it, expect } from '@jest/globals';
 import {
   PersonaTemplateSchema,
   renderSystemPrompt,
-  type PersonaTemplate,
+  type PersonaTemplateInput,
 } from './persona-prompt.template';
 
-const base: PersonaTemplate = {
+const base: PersonaTemplateInput = {
   customerProfile: 'Premium subscriber for 3 years',
   company: 'Nimbus Telecom',
   issue: 'charged twice for this month bill',
@@ -105,5 +105,56 @@ describe('renderSystemPrompt', () => {
     expect(pinned).toContain(
       'Your opening message should be essentially: "Hi, I was charged twice and need a refund."',
     );
+  });
+});
+
+describe('renderSystemPrompt — adopted fields (customer-support)', () => {
+  it('omits the gender line when gender is absent', () => {
+    const parsed = PersonaTemplateSchema.parse(base);
+    expect(parsed.gender).toBeUndefined();
+    expect(renderSystemPrompt(base)).not.toContain('keep your pronouns');
+  });
+
+  it('renders gender and age when provided', () => {
+    const male = renderSystemPrompt({ ...base, gender: 'male' });
+    expect(male).toContain('You are a man');
+    const female = renderSystemPrompt({ ...base, gender: 'female', customerAge: 34 });
+    expect(female).toContain('You are a woman');
+    expect(female).toContain('You are 34 years old.');
+  });
+
+  it('renders verifiable contact / account details only when present', () => {
+    expect(renderSystemPrompt(base)).not.toContain('verify your identity');
+    const prompt = renderSystemPrompt({
+      ...base,
+      customerContact: '+1 555 0100',
+      accountRef: 'ORD-9931',
+    });
+    expect(prompt).toContain('verify your identity');
+    expect(prompt).toContain('+1 555 0100');
+    expect(prompt).toContain('ORD-9931');
+  });
+
+  it('renders escalation / de-escalation triggers when present', () => {
+    const prompt = renderSystemPrompt({
+      ...base,
+      escalationTriggers: 'the agent puts you on hold again',
+      deescalationTriggers: 'the agent apologises sincerely',
+    });
+    expect(prompt).toContain('more upset when: the agent puts you on hold again');
+    expect(prompt).toContain('calm down when: the agent apologises sincerely');
+  });
+
+  it('folds the closing statement into the ending, before the sentinel', () => {
+    const prompt = renderSystemPrompt({
+      ...base,
+      closingStatement: 'Thanks, that sorts it out.',
+    });
+    expect(prompt).toContain('sign off with essentially: "Thanks, that sorts it out."');
+    expect(prompt).toContain('[CONVERSATION_ENDED]');
+  });
+
+  it('defaults domain to customer-support', () => {
+    expect(PersonaTemplateSchema.parse(base).domain).toBe('customer-support');
   });
 });

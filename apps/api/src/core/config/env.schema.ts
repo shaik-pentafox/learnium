@@ -35,28 +35,24 @@ export const EnvSchema = z.object({
   THROTTLE_LIMIT: z.coerce.number().int().positive().default(100),
   THROTTLE_LOGIN_LIMIT: z.coerce.number().int().positive().default(5),
 
-  // Uploads
-  UPLOAD_MAX_VIDEO_MB: z.coerce.number().int().positive().default(500),
-  UPLOAD_MAX_DOC_MB: z.coerce.number().int().positive().default(50),
-
   // Worker
   WORKER_CONCURRENCY: z.coerce.number().int().positive().default(5),
 
   // Sessions — idle ACTIVE sessions older than this are reaped → ABANDONED
   SESSION_IDLE_TIMEOUT_MINUTES: z.coerce.number().int().positive().default(30),
 
-  // Voice (STT/TTS) — provider-agnostic port; only one adapter bound today (Sarvam).
-  VOICE_PROVIDER: z.enum(['sarvam']).default('sarvam'),
-  SARVAM_API_KEY: z.string().optional(),
-  SARVAM_BASE_URL: z.string().url().default('https://api.sarvam.ai'),
-  SARVAM_STT_WS_URL: z.string().default('wss://api.sarvam.ai/speech-to-text/ws'),
-  SARVAM_STT_MODEL: z.string().default('saarika:v2.5'),
-  SARVAM_TTS_MODEL: z.string().default('bulbul:v3'),
-
   // Observability
   LOG_LEVEL: z.enum(['trace', 'debug', 'info', 'warn', 'error', 'fatal']).default('info'),
   OTEL_EXPORTER_OTLP_ENDPOINT: z.string().optional(),
   SENTRY_DSN: z.string().optional(),
+
+  // LangSmith (LangChain/LangGraph tracing + evals). Off by default. When
+  // enabled, prompts + completions are sent to LangSmith — a data-governance
+  // decision; keep off in prod unless deliberately approved. See docs/LANGSMITH_SETUP.md.
+  LANGSMITH_TRACING: z.coerce.boolean().default(false),
+  LANGSMITH_API_KEY: z.string().optional(),
+  LANGSMITH_PROJECT: z.string().default('traineon'),
+  LANGSMITH_ENDPOINT: z.string().url().default('https://api.smith.langchain.com'),
 
   // Credential verifier
   CREDENTIAL_VERIFIER: z.enum(['local', 'external']).default('local'),

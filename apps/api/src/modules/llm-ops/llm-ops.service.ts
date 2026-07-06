@@ -136,6 +136,8 @@ export class LlmOpsService {
       omit: PROVIDER_OMIT,
       include: { masterProvider: { select: MASTER_PROVIDER_SELECT } },
     });
+    // Disabling a provider can orphan a primary model — heal before invalidating.
+    if (dto.isEnabled === false) await this.reconcileDefaults();
     await this.invalidateModelCache();
     return provider;
   }
@@ -147,8 +149,33 @@ export class LlmOpsService {
       data: { isEnabled: false },
       omit: PROVIDER_OMIT,
     });
+    await this.reconcileDefaults();
     await this.invalidateModelCache();
     return provider;
+  }
+
+  /** After a provider becomes unavailable, ensure each kind still has a primary
+   *  model on an ENABLED provider — promote a replacement if the old default was
+   *  orphaned. Keeps model/voice resolution working after a disable/swap. */
+  private async reconcileDefaults(): Promise<void> {
+    for (const kind of ['chat', 'voice'] as const) {
+      const healthy = await this.prisma.llmModel.findFirst({
+        where: { kind, isDefault: true, provider: { isEnabled: true } },
+      });
+      if (healthy) continue;
+      const replacement = await this.prisma.llmModel.findFirst({
+        where: { kind, provider: { isEnabled: true } },
+        orderBy: { id: 'asc' },
+      });
+      if (!replacement) continue; // no enabled model of this kind — nothing to promote
+      await this.prisma.$transaction([
+        this.clearDefaults(kind),
+        this.prisma.llmModel.update({
+          where: { id: replacement.id },
+          data: { isDefault: true },
+        }),
+      ]);
+    }
   }
 
   // ── Models ──────────────────────────────────────────────────────────────────
