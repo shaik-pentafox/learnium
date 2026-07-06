@@ -2,6 +2,7 @@ import { Logger } from '@nestjs/common';
 import { GoogleGenAI, Modality } from '@google/genai';
 import type { IVoiceManager, S2SManagerOptions } from '../voice-manager';
 import { pcm16WavHeader } from './pcm-util';
+import { SentinelHoldback } from './transcript-holdback';
 
 /** Gemini Live emits PCM16 mono at 24kHz; accepts client PCM16 at any declared rate. */
 const GEMINI_OUTPUT_RATE = 24000;
@@ -50,6 +51,8 @@ export class GeminiLiveManager implements IVoiceManager {
 
   private userText = '';
   private assistantText = '';
+  /** Sentinel-safe streaming of the transcript to the client as `token` frames. */
+  private holdback = new SentinelHoldback(END_SENTINEL);
   private responseStartedAt = 0;
   /** Barge-in flag: drop model audio until the interrupted turn completes. */
   private cancelling = false;
@@ -142,6 +145,11 @@ export class GeminiLiveManager implements IVoiceManager {
       // First assistant output = the user's utterance is settled.
       if (this.userText && this.assistantText === '') this.settleUserTranscript();
       this.assistantText += outText;
+      // Live chat bubble, same as text mode (holdback hides the end sentinel).
+      if (!this.cancelling) {
+        const safe = this.holdback.push(outText);
+        if (safe) this.opts.callbacks.sendJson({ type: 'token', delta: safe });
+      }
     }
 
     const parts = sc.modelTurn?.parts ?? [];
@@ -160,6 +168,10 @@ export class GeminiLiveManager implements IVoiceManager {
 
     if (sc.turnComplete) {
       this.flushAudio();
+      const rest = this.holdback.flush();
+      if (rest && !this.cancelling) {
+        this.opts.callbacks.sendJson({ type: 'token', delta: rest });
+      }
       let text = this.assistantText.trim();
       let ended = false;
       if (text.includes(END_SENTINEL)) {
@@ -167,7 +179,9 @@ export class GeminiLiveManager implements IVoiceManager {
         text = text.replace(END_SENTINEL, '').trim();
       }
       const latencyMs = this.responseStartedAt ? Date.now() - this.responseStartedAt : 0;
-      if (text && !this.cancelling) {
+      // Persist even when the turn was interrupted — the user heard (part of)
+      // it, and the client bubble needs its message_done to settle.
+      if (text) {
         this.opts.callbacks.onAssistantTranscript(text, latencyMs);
       }
       const usage = msg.usageMetadata;

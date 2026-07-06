@@ -3,6 +3,11 @@ import { useEffect, useRef } from 'react'
 /** Wire format the server expects. */
 const TARGET_RATE = 16000
 
+export interface MicCapture {
+  /** Latest mic input level, normalized 0–1 (0 while muted/disabled). */
+  getLevel: () => number
+}
+
 /**
  * Captures microphone audio and emits raw PCM16 chunks at 16 kHz.
  *
@@ -12,18 +17,28 @@ const TARGET_RATE = 16000
  * bugs where the OTHER context's playback pitch-shifts (agent voice going
  * deep after the mic starts).
  *
+ * `muted` only gates chunk forwarding — the stream and context stay alive so
+ * unmuting is instant (no new permission prompt, no context rebuild).
+ *
  * Cleans up (stops tracks, closes context) when `enabled` flips to false or
  * the component unmounts.
  */
 export function useMicCapture(
   onChunk: (buf: ArrayBuffer) => void,
   enabled: boolean,
-): void {
+  muted = false,
+): MicCapture {
   const onChunkRef = useRef(onChunk)
   onChunkRef.current = onChunk
+  const mutedRef = useRef(muted)
+  mutedRef.current = muted
+  const levelRef = useRef(0)
 
   useEffect(() => {
-    if (!enabled) return
+    if (!enabled) {
+      levelRef.current = 0
+      return
+    }
 
     let stream: MediaStream
     let audioCtx: AudioContext
@@ -49,7 +64,13 @@ export function useMicCapture(
       workletNode = new AudioWorkletNode(audioCtx, 'pcm-processor')
       const sourceRate = audioCtx.sampleRate
       workletNode.port.onmessage = (e: MessageEvent<ArrayBuffer>) => {
-        onChunkRef.current(downsamplePcm16(e.data, sourceRate, TARGET_RATE))
+        if (mutedRef.current) {
+          levelRef.current = 0
+          return
+        }
+        const pcm = downsamplePcm16(e.data, sourceRate, TARGET_RATE)
+        levelRef.current = pcm16Rms(pcm)
+        onChunkRef.current(pcm)
       }
       source.connect(workletNode)
     }
@@ -60,11 +81,27 @@ export function useMicCapture(
 
     return () => {
       active = false
+      levelRef.current = 0
       workletNode?.disconnect()
       stream?.getTracks().forEach((t) => t.stop())
       void audioCtx?.close()
     }
   }, [enabled])
+
+  return { getLevel: () => levelRef.current }
+}
+
+/** RMS of a PCM16 chunk, scaled so normal speech lands around 0.3–0.8. */
+function pcm16Rms(buf: ArrayBuffer): number {
+  const samples = new Int16Array(buf)
+  if (samples.length === 0) return 0
+  let sum = 0
+  for (let i = 0; i < samples.length; i++) {
+    const s = samples[i]! / 32768
+    sum += s * s
+  }
+  // Speech RMS rarely exceeds ~0.25 — scale up and clamp to the 0–1 range.
+  return Math.min(Math.sqrt(sum / samples.length) * 4, 1)
 }
 
 /** Linear-interpolation downsample of PCM16 mono LE. No-op when rates match. */

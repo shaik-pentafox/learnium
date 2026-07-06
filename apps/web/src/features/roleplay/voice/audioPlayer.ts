@@ -7,7 +7,8 @@
  * audible gap at every frame boundary (choppy speech). Call `stop()` for
  * barge-in: all scheduled sources are killed immediately.
  *
- * Output goes straight to `ctx.destination`. A MediaStreamDestination →
+ * Output goes to `ctx.destination` (via a passive AnalyserNode tap for the
+ * level meter). A MediaStreamDestination →
  * <audio> element route was tried for echo cancellation (Chromium AEC only
  * references media-element output), but Chrome's live-stream drift
  * compensation progressively time-stretched playback (low/slow voice after
@@ -20,6 +21,10 @@ const RESTART_LEAD_S = 0.15
 
 export class AudioPlayer {
   private ctx: AudioContext | null = null
+  /** Passthrough tap for output-level metering (sources → analyser → dest).
+   *  A passive node in the SAME context — none of the MediaStreamDestination
+   *  drift risk described above. */
+  private analyser: AnalyserNode | null = null
 
   /** Live (scheduled or playing) sources — killed on stop(). */
   private readonly sources = new Set<AudioBufferSourceNode>()
@@ -38,6 +43,20 @@ export class AudioPlayer {
   /** True while any buffer is playing or scheduled. */
   get isPlaying(): boolean {
     return this.sources.size > 0
+  }
+
+  /** Current output level, normalized 0–1 (0 when nothing is playing). */
+  getLevel(): number {
+    if (!this.analyser || this.sources.size === 0) return 0
+    const data = new Uint8Array(this.analyser.fftSize)
+    this.analyser.getByteTimeDomainData(data)
+    let sum = 0
+    for (let i = 0; i < data.length; i++) {
+      const s = (data[i]! - 128) / 128
+      sum += s * s
+    }
+    // Same speech-band scaling as the mic meter (RMS ~0.25 at loud speech).
+    return Math.min(Math.sqrt(sum / data.length) * 4, 1)
   }
 
   async enqueue(bytes: ArrayBuffer): Promise<void> {
@@ -66,6 +85,7 @@ export class AudioPlayer {
     this.stop()
     void this.ctx?.close()
     this.ctx = null
+    this.analyser = null
   }
 
   private async decodeAndSchedule(bytes: ArrayBuffer): Promise<void> {
@@ -81,7 +101,7 @@ export class AudioPlayer {
 
     const source = ctx.createBufferSource()
     source.buffer = buffer
-    source.connect(ctx.destination)
+    source.connect(this.analyser ?? ctx.destination)
     // Splice exactly onto the end of the previous buffer. When the pipeline
     // (re)starts — first frame, or the queue ran dry — lead by 150ms as a
     // jitter buffer: with a hairline lead, any frame arriving a beat late
@@ -113,6 +133,9 @@ export class AudioPlayer {
   private ensureCtx(): AudioContext {
     if (!this.ctx || this.ctx.state === 'closed') {
       this.ctx = new AudioContext()
+      this.analyser = this.ctx.createAnalyser()
+      this.analyser.fftSize = 256
+      this.analyser.connect(this.ctx.destination)
       this.nextTime = 0
     }
     return this.ctx

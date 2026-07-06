@@ -2,6 +2,7 @@ import { Logger } from '@nestjs/common';
 import WebSocket from 'ws';
 import type { IVoiceManager, S2SManagerOptions } from '../voice-manager';
 import { pcm16WavHeader, resamplePcm16 } from './pcm-util';
+import { SentinelHoldback } from './transcript-holdback';
 
 const OPENAI_REALTIME_URL = 'wss://api.openai.com/v1/realtime';
 /** OpenAI Realtime pcm16 is fixed at 24kHz mono little-endian. */
@@ -43,6 +44,8 @@ export class OpenAIRealtimeManager implements IVoiceManager {
 
   /** Assistant transcript accumulator for the in-flight response. */
   private assistantText = '';
+  /** Sentinel-safe streaming of the transcript to the client as `token` frames. */
+  private holdback = new SentinelHoldback(END_SENTINEL);
   private responseStartedAt = 0;
   private ended = false;
   /** True while the model is generating/speaking — barge-in only matters then. */
@@ -210,6 +213,7 @@ export class OpenAIRealtimeManager implements IVoiceManager {
         this.audioChunks = [];
         this.audioBuffered = 0;
         this.assistantText = '';
+        this.holdback.flush();
         this.currentItemId = null;
         this.sentAudioBytes = 0;
         break;
@@ -255,15 +259,23 @@ export class OpenAIRealtimeManager implements IVoiceManager {
         this.flushAudio();
         break;
 
-      // Assistant transcript: stream to captions + accumulate for persistence.
+      // Assistant transcript: stream to the client as chat `token` frames
+      // (live bubble, same as text mode) + accumulate for persistence. The
+      // holdback keeps the end sentinel from ever flashing on screen.
       case 'response.output_audio_transcript.delta':
       case 'response.audio_transcript.delta':
-        if (evt.delta) this.assistantText += evt.delta;
+        if (evt.delta) {
+          this.assistantText += evt.delta;
+          const safe = this.holdback.push(evt.delta);
+          if (safe) this.opts.callbacks.sendJson({ type: 'token', delta: safe });
+        }
         break;
 
       case 'response.done': {
         this.responseInFlight = false;
         this.flushAudio();
+        const rest = this.holdback.flush();
+        if (rest) this.opts.callbacks.sendJson({ type: 'token', delta: rest });
         let text = this.assistantText.trim();
         if (text.includes(END_SENTINEL)) {
           this.ended = true;
@@ -370,6 +382,7 @@ export class OpenAIRealtimeManager implements IVoiceManager {
 
   private resetResponseState(): void {
     this.assistantText = '';
+    this.holdback.flush();
     this.audioChunks = [];
     this.audioBuffered = 0;
     this.responseStartedAt = 0;

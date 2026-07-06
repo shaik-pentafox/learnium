@@ -4,13 +4,12 @@ import { http, HttpResponse } from 'msw'
 import {
   listProviders,
   listModels,
+  listMasterProviders,
+  listMasterModels,
   createProvider,
   updateProvider,
-  buildProviderPayload,
   createModel,
-  updateModel,
   promoteModel,
-  buildModelPayload,
   listUsage,
   llmKeys,
 } from '@/services/llm'
@@ -28,173 +27,151 @@ function ok<T>(data: T) {
 }
 
 describe('llm service', () => {
-  it('listProviders returns the provider array', async () => {
+  it('listProviders returns the provider array with the masked key hint', async () => {
     server.use(
       http.get('*/api/v1/llm/providers', () =>
-        ok([{ id: 1, name: 'OpenAI', type: 'openai', isEnabled: true, priority: 1 }]),
+        ok([{ id: 1, name: 'OpenAI', type: 'openai', isEnabled: true, credentialHint: 'sk-…abc4' }]),
       ),
     )
     const result = await listProviders()
     expect(result[0].name).toBe('OpenAI')
+    expect(result[0].credentialHint).toBe('sk-…abc4')
   })
 
-  it('listModels returns the model array', async () => {
+  it('listModels forwards the kind filter', async () => {
     server.use(
-      http.get('*/api/v1/llm/models', () =>
+      http.get('*/api/v1/llm/models', ({ request }) => {
+        expect(new URL(request.url).searchParams.get('kind')).toBe('voice')
+        return ok([
+          {
+            id: 13, name: 'gemini-3.1-flash-live-preview', providerId: 2,
+            kind: 'voice', capabilities: [], isDefault: true,
+          },
+        ])
+      }),
+    )
+    const result = await listModels('voice')
+    expect(result[0].kind).toBe('voice')
+    expect(result[0].isDefault).toBe(true)
+  })
+
+  it('listMasterProviders returns the seeded catalog', async () => {
+    server.use(
+      http.get('*/api/v1/llm/masters/providers', () =>
         ok([
           {
-            id: 1, name: 'gpt-4o', providerId: 1,
-            capabilities: ['chat'], isDefault: true,
+            id: 1, key: 'openai', name: 'OpenAI', adapterType: 'openai',
+            supports: ['chat', 'voice'], configuredProviderIds: [1],
           },
         ]),
       ),
     )
-    const result = await listModels()
-    expect(result[0].isDefault).toBe(true)
+    const result = await listMasterProviders()
+    expect(result[0].key).toBe('openai')
+    expect(result[0].configuredProviderIds).toContain(1)
+  })
+
+  it('listMasterModels scopes by configured provider + kind', async () => {
+    server.use(
+      http.get('*/api/v1/llm/masters/models', ({ request }) => {
+        const params = new URL(request.url).searchParams
+        expect(params.get('providerId')).toBe('2')
+        expect(params.get('kind')).toBe('voice')
+        return ok([
+          {
+            id: 7, masterProviderId: 2, key: 'gemini-3.1-flash-live-preview',
+            name: 'Gemini 3.1 Flash Live', kind: 'voice', voicePipeline: 's2s',
+            languages: ['en-IN', 'hi-IN'], voices: ['Puck'],
+          },
+        ])
+      }),
+    )
+    const result = await listMasterModels(2, 'voice')
+    expect(result[0].voicePipeline).toBe('s2s')
   })
 
   it('llmKeys compose off the llm-ops namespace', () => {
     expect(llmKeys.providers()).toEqual([...queryKeys.llmOps, 'providers'])
     expect(llmKeys.models()).toEqual([...queryKeys.llmOps, 'models'])
-  })
-})
-
-describe('buildProviderPayload', () => {
-  const base = { name: 'OpenAI', type: 'openai', isEnabled: true, priority: 1 }
-
-  it('omits blank baseUrl and apiKey instead of sending empty strings', () => {
-    const payload = buildProviderPayload({ ...base, baseUrl: '', apiKey: '' })
-    expect(payload).not.toHaveProperty('baseUrl')
-    expect(payload).not.toHaveProperty('apiKey')
-  })
-
-  it('omits monthlyBudgetUsd when null or not positive', () => {
-    expect(buildProviderPayload({ ...base, monthlyBudgetUsd: null })).not.toHaveProperty('monthlyBudgetUsd')
-    expect(buildProviderPayload({ ...base, monthlyBudgetUsd: 0 })).not.toHaveProperty('monthlyBudgetUsd')
-  })
-
-  it('includes provided values and trims strings', () => {
-    const payload = buildProviderPayload({
-      ...base,
-      name: '  OpenAI Prod  ',
-      baseUrl: 'https://api.openai.com/v1',
-      apiKey: 'sk-123',
-      monthlyBudgetUsd: 500,
-    })
-    expect(payload).toEqual({
-      name: 'OpenAI Prod',
-      type: 'openai',
-      isEnabled: true,
-      priority: 1,
-      baseUrl: 'https://api.openai.com/v1',
-      apiKey: 'sk-123',
-      monthlyBudgetUsd: 500,
-    })
+    expect(llmKeys.masterModels(2, 'voice')).toEqual([
+      ...queryKeys.llmOps, 'master-models', 2, 'voice',
+    ])
   })
 })
 
 describe('llm provider mutations', () => {
-  it('createProvider POSTs and returns the created provider', async () => {
+  it('createProvider sends master id + key, omitting blank optional fields', async () => {
     server.use(
       http.post('*/api/v1/llm/providers', async ({ request }) => {
         const body = (await request.json()) as Record<string, unknown>
-        expect(body).not.toHaveProperty('apiKey') // blank key stripped
-        return ok({ id: 9, name: body.name, type: body.type, isEnabled: true, priority: 0 })
+        expect(body.masterProviderId).toBe(1)
+        expect(body.apiKey).toBe('sk-123')
+        expect(body).not.toHaveProperty('name') // blank stripped
+        expect(body).not.toHaveProperty('baseUrl')
+        expect(body).not.toHaveProperty('monthlyBudgetUsd')
+        return ok({ id: 9, name: 'OpenAI', type: 'openai', isEnabled: true })
       }),
     )
     const result = await createProvider({
-      name: 'Anthropic',
-      type: 'anthropic',
-      apiKey: '',
+      masterProviderId: 1,
+      apiKey: 'sk-123',
+      name: '  ',
+      baseUrl: '',
       isEnabled: true,
-      priority: 0,
+      monthlyBudgetUsd: 0,
     })
     expect(result.id).toBe(9)
-    expect(result.name).toBe('Anthropic')
   })
 
-  it('updateProvider PATCHes the target id', async () => {
+  it('updateProvider with apiKey rotates the key; blank key omitted', async () => {
     server.use(
       http.patch('*/api/v1/llm/providers/3', async ({ request }) => {
         const body = (await request.json()) as Record<string, unknown>
-        expect(body.priority).toBe(5)
-        return ok({ id: 3, name: 'Azure', type: 'azure', isEnabled: false, priority: 5 })
+        expect(body.apiKey).toBe('sk-new')
+        expect(body.isEnabled).toBe(false)
+        return ok({ id: 3, name: 'OpenAI', type: 'openai', isEnabled: false, credentialHint: 'sk-…-new' })
       }),
     )
-    const result = await updateProvider(3, {
-      name: 'Azure',
-      type: 'azure',
-      apiKey: '',
-      isEnabled: false,
-      priority: 5,
-    })
-    expect(result.priority).toBe(5)
-  })
-})
-
-describe('buildModelPayload', () => {
-  const base = {
-    name: 'gpt-4o',
-    providerId: 1,
-    capabilities: ['chat'],
-    isDefault: false,
-  }
-
-  it('omits contextWindowTokens when null or not positive', () => {
-    expect(buildModelPayload({ ...base, contextWindowTokens: null })).not.toHaveProperty('contextWindowTokens')
-    expect(buildModelPayload({ ...base, contextWindowTokens: 0 })).not.toHaveProperty('contextWindowTokens')
+    const result = await updateProvider(3, { apiKey: 'sk-new', isEnabled: false })
+    expect(result.isEnabled).toBe(false)
   })
 
-  it('keeps a zero price (nonnegative) but omits a null price', () => {
-    const payload = buildModelPayload({
-      ...base,
-      inputPricePerMillion: 0,
-      outputPricePerMillion: null,
-    })
-    expect(payload.inputPricePerMillion).toBe(0)
-    expect(payload).not.toHaveProperty('outputPricePerMillion')
+  it('updateProvider clears baseUrl by sending null when field present but blank', async () => {
+    server.use(
+      http.patch('*/api/v1/llm/providers/3', async ({ request }) => {
+        const body = (await request.json()) as Record<string, unknown>
+        expect(body.baseUrl).toBeNull()
+        expect(body).not.toHaveProperty('apiKey')
+        return ok({ id: 3, name: 'OpenAI', type: 'openai', isEnabled: true })
+      }),
+    )
+    await updateProvider(3, { baseUrl: '', apiKey: '' })
   })
 })
 
 describe('llm model mutations', () => {
-  it('createModel POSTs to /llm/models', async () => {
+  it('createModel POSTs the provider + master model pair', async () => {
     server.use(
       http.post('*/api/v1/llm/models', async ({ request }) => {
         const body = (await request.json()) as Record<string, unknown>
         expect(body.providerId).toBe(2)
-        return ok({ id: 10, name: body.name, providerId: 2, capabilities: ['chat'], isDefault: false })
+        expect(body.masterModelId).toBe(7)
+        return ok({ id: 10, name: 'gemini-2.5-flash', providerId: 2, kind: 'chat', capabilities: [], isDefault: false })
       }),
     )
-    const result = await createModel({
-      name: 'claude-opus',
-      providerId: 2,
-      capabilities: ['chat'],
-      isDefault: false,
-    })
+    const result = await createModel({ providerId: 2, masterModelId: 7 })
     expect(result.id).toBe(10)
-  })
-
-  it('updateModel PATCHes the target id', async () => {
-    server.use(
-      http.patch('*/api/v1/llm/models/10', async () =>
-        ok({ id: 10, name: 'claude-opus', providerId: 2, capabilities: ['chat', 'vision'], isDefault: false }),
-      ),
-    )
-    const result = await updateModel(10, {
-      name: 'claude-opus',
-      providerId: 2,
-      capabilities: ['chat', 'vision'],
-      isDefault: false,
-    })
-    expect(result.capabilities).toContain('vision')
   })
 
   it('promoteModel POSTs to the promote sub-route', async () => {
     server.use(
-      http.post('*/api/v1/llm/models/10/promote', () => ok({ id: 10, promoted: true })),
+      http.post('*/api/v1/llm/models/10/promote', () =>
+        ok({ id: 10, promoted: true, kind: 'chat' }),
+      ),
     )
     const result = await promoteModel(10)
     expect(result.promoted).toBe(true)
+    expect(result.kind).toBe('chat')
   })
 })
 

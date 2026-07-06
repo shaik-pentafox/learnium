@@ -21,6 +21,7 @@ import { useAuthStore } from '@/stores/auth'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Orb, type AgentState } from '@/components/chat/orb'
+import { VoiceBar } from '@/components/chat/voice-bar'
 import { MarkdownText } from '@/components/chat/markdown'
 import { ShimmeringText } from '@/components/shimmering-text'
 import { useSidebar } from '@/components/ui/sidebar'
@@ -244,14 +245,9 @@ function ChatSession() {
           <ReconnectBanner status={session.status} />
         )}
 
-      {/* Transcript + voice overlay container */}
+      {/* Transcript */}
       <div className="relative flex-1 overflow-hidden">
-        <Conversation
-          className={cn(
-            'h-full rounded-xl border border-border bg-surface',
-            voiceMode && session.voiceActive && !session.ending && !session.ended && 'opacity-30 pointer-events-none select-none',
-          )}
-        >
+        <Conversation className="h-full rounded-xl border border-border bg-surface">
           <ConversationContent className="space-y-1">
             {session.messages.length === 0 && !session.thinking && (
               <EmptyState colors={orbColors} />
@@ -259,6 +255,18 @@ function ChatSession() {
             {session.messages.map((m) => (
               <Bubble key={m.localId} message={m} />
             ))}
+            {/* Live utterance: STT partial rendered as an in-progress user
+                bubble; replaced by the real message on stt_final. */}
+            {voiceMode && session.sttCaption && (
+              <Bubble
+                message={{
+                  localId: 'stt-partial',
+                  role: 'user',
+                  content: session.sttCaption,
+                  pending: true,
+                }}
+              />
+            )}
             {session.thinking &&
               !session.ending &&
               session.messages.at(-1)?.role !== 'assistant' && <TypingBubble />}
@@ -278,34 +286,6 @@ function ChatSession() {
           </ConversationContent>
           <ConversationScrollButton />
         </Conversation>
-
-        {/* Voice overlay — sits over transcript, orb centered */}
-        {voiceMode && session.voiceActive && !session.ending && !session.ended && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center rounded-xl bg-background/75 backdrop-blur-md">
-            <Orb
-              colors={orbColors}
-              agentState={orbState}
-              className="size-52"
-            />
-            {session.sttCaption && (
-              <p className="mt-5 max-w-xs text-center text-sm italic text-muted-foreground">
-                {session.sttCaption}
-                <Caret />
-              </p>
-            )}
-            <Button
-              variant="ghost"
-              size="sm"
-              className="mt-6 text-muted-foreground hover:text-foreground"
-              onClick={() => {
-                if (session.thinking) session.cancelTurn()
-                else session.stopVoice()
-              }}
-            >
-              {session.thinking ? 'Interrupt' : 'Stop voice'}
-            </Button>
-          </div>
-        )}
       </div>
 
       {/* Composer — text mode only */}
@@ -355,6 +335,26 @@ function ChatSession() {
             </Button>
           </div>
         )
+      )}
+
+      {/* Voice bar — replaces the composer while the voice loop runs */}
+      {voiceMode && session.voiceActive && !session.ending && !session.ended && (
+        <VoiceBar session={session} />
+      )}
+
+      {/* Voice mode: scoring in progress */}
+      {voiceMode && session.ending && !session.ended && (
+        <div className="mt-3 flex items-center justify-center gap-2 rounded-xl border border-border bg-background p-3 shadow-sm shadow-black/5">
+          <Dot /> <Dot /> <Dot />
+          <ShimmeringText
+            text={
+              session.status === 'open'
+                ? 'Scoring your conversation…'
+                : 'Reconnecting…'
+            }
+            className="text-sm"
+          />
+        </div>
       )}
 
       {/* Voice mode: upstream dropped (voice_stopped) — offer a manual restart */}

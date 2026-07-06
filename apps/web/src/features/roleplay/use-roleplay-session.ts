@@ -47,6 +47,13 @@ export interface RoleplaySession {
   stopVoice: () => void
   /** Barge-in: abort the current AI turn + TTS, restart listening. */
   cancelTurn: () => void
+  /** Client-side mic mute: audio keeps capturing but nothing is sent. */
+  micMuted: boolean
+  toggleMic: () => void
+  /** Live mic input level 0–1 (for the voice bar visualization). */
+  getInputLevel: () => number
+  /** Live agent playback level 0–1 (for the voice bar visualization). */
+  getOutputLevel: () => number
 }
 
 function uid(): string {
@@ -69,6 +76,7 @@ export function useRoleplaySession(sessionUid: string): RoleplaySession {
   const [personaLanguages, setPersonaLanguages] = useState<string[]>([])
   const [voiceActive, setVoiceActive] = useState(false)
   const [sttCaption, setSttCaption] = useState<string | null>(null)
+  const [micMuted, setMicMuted] = useState(false)
 
   const channelRef = useRef<RoleplayChannel | null>(null)
   const lastServerIdRef = useRef<string | null>(null)
@@ -140,6 +148,7 @@ export function useRoleplaySession(sessionUid: string): RoleplaySession {
       case 'voice_started':
         setVoiceActive(true)
         setSttCaption(null)
+        setMicMuted(false)
         break
       case 'voice_stopped':
         setVoiceActive(false)
@@ -195,7 +204,7 @@ export function useRoleplaySession(sessionUid: string): RoleplaySession {
   const onMicChunk = useCallback((buf: ArrayBuffer) => {
     channelRef.current?.sendAudio(buf)
   }, [])
-  useMicCapture(onMicChunk, voiceActive)
+  const mic = useMicCapture(onMicChunk, voiceActive, micMuted)
 
   const sendMessage = useCallback((content: string) => {
     const trimmed = content.trim()
@@ -240,6 +249,10 @@ export function useRoleplaySession(sessionUid: string): RoleplaySession {
     playerRef.current.stop()
   }, [])
 
+  const toggleMic = useCallback(() => setMicMuted((m) => !m), [])
+  const getInputLevel = mic.getLevel
+  const getOutputLevel = useCallback(() => playerRef.current.getLevel(), [])
+
   return {
     status,
     personaName,
@@ -261,5 +274,9 @@ export function useRoleplaySession(sessionUid: string): RoleplaySession {
     startVoice,
     stopVoice,
     cancelTurn,
+    micMuted,
+    toggleMic,
+    getInputLevel,
+    getOutputLevel,
   }
 }
