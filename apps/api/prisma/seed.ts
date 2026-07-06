@@ -2,7 +2,7 @@ import { PrismaClient, Prisma } from '@prisma/client';
 import * as argon2 from 'argon2';
 import {
   renderSystemPrompt,
-  type PersonaTemplate,
+  type PersonaTemplateInput,
 } from '../src/core/llm/persona-prompt.template';
 
 const prisma = new PrismaClient();
@@ -20,7 +20,7 @@ interface SeedPersona {
   description: string;
   /** Hex accent for the persona's chat orb/avatar. Distinct per persona. */
   color: string;
-  template: PersonaTemplate;
+  template: PersonaTemplateInput;
   criteria: SeedCriterion[];
 }
 
@@ -33,6 +33,10 @@ const SEED_PERSONAS: SeedPersona[] = [
     color: '#f59e0b', // amber
     template: {
       customerName: 'Dana',
+      gender: 'female',
+      customerAge: 41,
+      customerContact: 'dana.k@example.com',
+      accountRef: 'NMB-88213',
       customerProfile: 'Premium subscriber for 3 years, pays by auto-debit.',
       company: 'Nimbus Telecom',
       productContext: 'Unlimited plan, billed monthly.',
@@ -40,11 +44,14 @@ const SEED_PERSONAS: SeedPersona[] = [
       channel: 'chat',
       emotion: 'frustrated',
       intensity: 4,
+      escalationTriggers: 'the agent asks you to repeat details you already gave, or blames the bank.',
+      deescalationTriggers: 'the agent confirms they can see the duplicate charge and owns the fix.',
       desiredOutcome: 'A refund of the duplicate charge.',
       hiddenDetails:
         'You switched plans mid-cycle, which you suspect may be related — mention only if asked.',
       resolutionCriteria:
         'the agent confirms the duplicate charge will be refunded and gives a timeframe',
+      closingStatement: 'Thanks, that puts my mind at ease — appreciate the help.',
     },
     criteria: [
       { name: 'Empathy', description: 'Acknowledges the frustration sincerely.', maxScore: 10, weight: 2, order: 0 },
@@ -58,6 +65,8 @@ const SEED_PERSONAS: SeedPersona[] = [
     color: '#ef4444', // red
     template: {
       customerName: 'Alex',
+      gender: 'male',
+      accountRef: 'VX-40917',
       customerProfile: 'New customer, first order with the company.',
       company: 'Vertex Appliances',
       productContext: 'Ordered a coffee machine, arrived with a cracked casing.',
@@ -65,6 +74,8 @@ const SEED_PERSONAS: SeedPersona[] = [
       channel: 'audio',
       emotion: 'angry',
       intensity: 5,
+      escalationTriggers: 'the agent quotes policy, puts you on hold, or asks you to email photos.',
+      deescalationTriggers: 'the agent apologises plainly and commits to a same-day replacement.',
       desiredOutcome: 'A replacement shipped immediately at no cost.',
       behaviorNotes:
         'You interrupt, raise your voice, and threaten to cancel and post a bad review if not helped quickly.',
@@ -83,6 +94,8 @@ const SEED_PERSONAS: SeedPersona[] = [
     color: '#8b5cf6', // violet
     template: {
       customerName: 'Carol',
+      gender: 'female',
+      customerAge: 68,
       customerProfile: 'Retired, not comfortable with technology.',
       company: 'BrightHome Security',
       productContext: 'A new smart doorbell that will not connect to Wi-Fi.',
@@ -110,17 +123,24 @@ const SEED_PERSONAS: SeedPersona[] = [
     color: '#14b8a6', // teal
     template: {
       customerName: 'Sam',
+      gender: 'male',
+      customerAge: 34,
+      customerContact: '+1 555 0142',
+      accountRef: 'MB-2200731',
       customerProfile: 'Long-time customer, careful about security.',
       company: 'Meridian Bank',
       issue: 'You saw a login alert from an unfamiliar device and you are scared your account is compromised.',
       channel: 'chat',
       emotion: 'anxious',
       intensity: 3,
+      escalationTriggers: 'the agent acts before verifying you, or is vague about what the alert means.',
+      deescalationTriggers: 'the agent verifies your identity properly and clearly explains the next steps.',
       desiredOutcome: 'Reassurance and your account secured immediately.',
       hiddenDetails:
         'You recently logged in from a new phone while travelling — reveal this only if the agent asks about recent activity.',
       resolutionCriteria:
         'the agent verifies your identity, explains the alert, and confirms the account is secure',
+      closingStatement: 'Okay, I feel a lot better knowing it is locked down. Thank you.',
     },
     criteria: [
       { name: 'Reassurance', description: 'Calms the customer while taking the concern seriously.', maxScore: 10, weight: 2, order: 0 },
@@ -130,29 +150,6 @@ const SEED_PERSONAS: SeedPersona[] = [
   },
 ];
 
-// Sarvam Bulbul (bulbul:v3) speakers offered in the persona builder voice picker.
-// Mirrors SARVAM_VOICES in src/core/voice/providers/sarvam.provider.ts.
-const SEED_VOICE_STYLES: { name: string; voiceId: string }[] = [
-  { name: 'Shubh (Sarvam)', voiceId: 'shubh' },
-  { name: 'Priya (Sarvam)', voiceId: 'priya' },
-  { name: 'Neha (Sarvam)', voiceId: 'neha' },
-  { name: 'Rahul (Sarvam)', voiceId: 'rahul' },
-  { name: 'Pooja (Sarvam)', voiceId: 'pooja' },
-  { name: 'Rohan (Sarvam)', voiceId: 'rohan' },
-  { name: 'Kavya (Sarvam)', voiceId: 'kavya' },
-  { name: 'Amit (Sarvam)', voiceId: 'amit' },
-];
-
-async function seedVoiceStyles(): Promise<void> {
-  for (const v of SEED_VOICE_STYLES) {
-    await prisma.voiceStyle.upsert({
-      where: { name: v.name },
-      update: { provider: 'sarvam', voiceId: v.voiceId },
-      create: { name: v.name, provider: 'sarvam', voiceId: v.voiceId },
-    });
-  }
-}
-
 async function seedPersonas(
   personas: SeedPersona[],
   createdById: number,
@@ -161,10 +158,19 @@ async function seedPersonas(
   for (const p of personas) {
     const existing = await prisma.persona.findFirst({ where: { name: p.name } });
     if (existing) {
-      // Re-seed only flips publish state; content is left as-is.
-      if (publish && !existing.isPublished) {
-        await prisma.persona.update({ where: { id: existing.id }, data: { isPublished: true } });
-      }
+      // Re-seed refreshes the canonical demo persona's content (template →
+      // rendered prompt, description, color) so schema changes land on re-run.
+      // Score criteria are left as-is to avoid duplicating rows.
+      await prisma.persona.update({
+        where: { id: existing.id },
+        data: {
+          description: p.description,
+          color: p.color,
+          templateData: p.template as unknown as Prisma.InputJsonValue,
+          systemPrompt: renderSystemPrompt(p.template),
+          isPublished: publish || existing.isPublished,
+        },
+      });
       continue;
     }
     await prisma.persona.create({
@@ -214,6 +220,8 @@ const SEED_TRAINERS: SeedTrainer[] = [
       color: '#fb923c', // orange
       template: {
         customerName: 'Rita',
+        gender: 'female',
+        accountRef: 'NMB-51120',
         customerProfile: 'Customer for 1 year, paid by card.',
         company: 'Nimbus Telecom',
         issue: 'You were promised a refund two weeks ago and it has not arrived.',
@@ -247,15 +255,18 @@ const SEED_TRAINERS: SeedTrainer[] = [
       color: '#3b82f6', // blue
       template: {
         customerName: 'Uma',
+        gender: 'female',
         customerProfile: 'Long-time customer weighing a plan upgrade.',
         company: 'Vertex Appliances',
         issue: 'You want to know if upgrading is worth it before committing.',
         channel: 'chat',
         emotion: 'calm',
         intensity: 2,
+        deescalationTriggers: 'the agent gives a straight, honest comparison without a hard sell.',
         desiredOutcome: 'A clear comparison so you can decide.',
         resolutionCriteria:
           'the agent explains the upgrade trade-offs clearly and lets the customer decide',
+        closingStatement: 'Great, that gives me what I need to decide. Thanks for laying it out.',
       },
       criteria: [
         { name: 'Clarity', maxScore: 10, weight: 2, order: 0 },
@@ -351,9 +362,6 @@ async function main() {
       userId: adminUser.id,
     },
   });
-
-  // Sarvam voice catalog for the persona builder picker.
-  await seedVoiceStyles();
 
   // Super-admin personas: published → visible to every trainee.
   await seedPersonas(SEED_PERSONAS, adminUser.id, true);

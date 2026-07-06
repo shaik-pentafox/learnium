@@ -6,6 +6,7 @@ import fastifyMultipart from '@fastify/multipart';
 import { ConfigService } from '@nestjs/config';
 import { Logger } from 'nestjs-pino';
 import { AppModule } from './app.module';
+import { configureLangSmith } from './core/observability/langsmith';
 import type { Env } from './core/config/env.schema';
 
 async function bootstrap(): Promise<void> {
@@ -20,6 +21,8 @@ async function bootstrap(): Promise<void> {
   await app.register(fastifyMultipart, { limits: { fileSize: 50 * 1024 * 1024 } });
 
   const config = app.get(ConfigService<Env, true>);
+  // Enable LangSmith tracing (if configured) before any LangChain model is built.
+  configureLangSmith(config);
   const port = config.get('PORT', { infer: true });
   const corsOrigins = config
     .get('CORS_ORIGINS', { infer: true })

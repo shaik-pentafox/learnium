@@ -2,7 +2,6 @@ import { HttpStatus, Injectable, Logger } from '@nestjs/common';
 import { GoogleGenAI } from '@google/genai';
 import { DomainException } from '../errors/domain.errors';
 import { ErrorCode } from '@traineon/contracts';
-import { SarvamVoiceProvider } from './providers/sarvam.provider';
 import { pcm16WavHeader } from './managers/pcm-util';
 import type { ResolvedVoiceModel } from './voice-model-factory.service';
 
@@ -37,8 +36,6 @@ export class VoicePreviewService {
   private readonly logger = new Logger(VoicePreviewService.name);
   private readonly cache = new Map<string, PreviewAudio>();
 
-  constructor(private readonly sarvam: SarvamVoiceProvider) {}
-
   async preview(
     resolved: ResolvedVoiceModel,
     voiceId: string,
@@ -65,12 +62,6 @@ export class VoicePreviewService {
       case 'gemini':
         audio = await this.geminiTts(resolved, voiceId, text);
         break;
-      case 'sarvam': {
-        if (resolved.apiKey) this.sarvam.setApiKey(resolved.apiKey);
-        const out = await this.sarvam.synthesize({ text, languageCode: lang, voiceId });
-        audio = { bytes: out.bytes, mime: out.mime };
-        break;
-      }
       default:
         throw new DomainException(
           ErrorCode.PROVIDER_UNAVAILABLE,

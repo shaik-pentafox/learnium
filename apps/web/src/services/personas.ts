@@ -14,19 +14,41 @@ export const EMOTIONS = [
 ] as const
 export type Emotion = (typeof EMOTIONS)[number]
 
+export const GENDERS = ['male', 'female'] as const
+export type Gender = (typeof GENDERS)[number]
+
 export interface PersonaTemplate {
+  // ── Identity ──
   customerName?: string
+  /** Backend defaults to 'unspecified' when absent. */
+  gender?: Gender
+  /** Verifiable age (identity-verification training). */
+  customerAge?: number
+  /** Verifiable contact the agent may confirm (phone/email). */
+  customerContact?: string
+  /** Verifiable account / order / ticket reference the agent may confirm. */
+  accountRef?: string
   customerProfile: string
+  // ── Situation ──
   company: string
   productContext?: string
   issue: string
   channel: Channel
+  // ── Emotion ──
   emotion: Emotion
   intensity: number
+  /** What makes the customer angrier (escalation dynamics). */
+  escalationTriggers?: string
+  /** What calms the customer down (de-escalation dynamics). */
+  deescalationTriggers?: string
+  // ── Goal & resolution ──
   desiredOutcome: string
+  resolutionCriteria: string
+  /** How the customer signs off — a natural text closer before the end sentinel. */
+  closingStatement?: string
+  // ── Difficulty / nuance ──
   hiddenDetails?: string
   behaviorNotes?: string
-  resolutionCriteria: string
   additionalInstructions?: string
   /** Optional fixed opener; blank → the model improvises the customer's first line. */
   openingMessage?: string
@@ -142,7 +164,12 @@ interface PersonaPayload {
 // which marks them `.optional()`, treats them as absent.
 const OPTIONAL_TEMPLATE_KEYS = [
   'customerName',
+  'customerContact',
+  'accountRef',
   'productContext',
+  'escalationTriggers',
+  'deescalationTriggers',
+  'closingStatement',
   'hiddenDetails',
   'behaviorNotes',
   'additionalInstructions',
@@ -164,6 +191,12 @@ function buildTemplatePayload(t: PersonaTemplate): PersonaTemplate {
   for (const key of OPTIONAL_TEMPLATE_KEYS) {
     const value = t[key]?.trim()
     if (value) out[key] = value
+  }
+  // Optional enum — only send when the trainer picked one.
+  if (t.gender) out.gender = t.gender
+  // Number field — send only a valid positive int (schema: min(1)).
+  if (typeof t.customerAge === 'number' && Number.isInteger(t.customerAge) && t.customerAge > 0) {
+    out.customerAge = t.customerAge
   }
   return out
 }

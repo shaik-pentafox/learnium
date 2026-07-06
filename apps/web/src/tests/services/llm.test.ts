@@ -168,6 +168,9 @@ describe('llm model mutations', () => {
       http.post('*/api/v1/llm/models/10/promote', () =>
         ok({ id: 10, promoted: true, kind: 'chat' }),
       ),
+      http.post('*/api/v1/llm/models/10/promote', () =>
+        ok({ id: 10, promoted: true, kind: 'chat' }),
+      ),
     )
     const result = await promoteModel(10)
     expect(result.promoted).toBe(true)

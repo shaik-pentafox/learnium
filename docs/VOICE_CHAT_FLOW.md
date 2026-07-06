@@ -24,14 +24,15 @@ flowchart LR
         F[VoiceModelFactory]
         M1[OpenAIRealtimeManager<br/>s2s]
         M2[GeminiLiveManager<br/>s2s]
-        M3[VoiceTurnManager<br/>stt+tts Sarvam]
     end
 
     CM --> P --> GW --> F
     F -->|adapterType openai| M1
     F -->|adapterType gemini| M2
-    F -->|adapterType sarvam| M3
 ```
+
+Voice is **native speech-to-speech only** (OpenAI Realtime, Gemini Live) — one
+upstream socket does VAD+STT+LLM+TTS in-model.
 
 - **Masters** are seeded (`npm run seed:llm`, ad-hoc via `npm run model:add`) and
   never edited through the API.
@@ -52,15 +53,13 @@ flowchart TD
     VM --> K{adapterType}
     K -->|openai| A["OpenAIRealtimeManager<br/>1 ws to OpenAI Realtime (GA)<br/>VAD+STT+LLM+TTS in-model"]
     K -->|gemini| B["GeminiLiveManager<br/>@google/genai live.connect<br/>VAD+STT+LLM+TTS in-model"]
-    K -->|sarvam| C["VoiceTurnManager<br/>Saarika STT ws → app LangGraph → Bulbul TTS"]
     A & B -->|owns the LLM turn<br/>graph bypassed| T[transcripts persisted as ChatMessages]
-    C -->|gateway drives LangGraph<br/>token deltas → sentence-chunked TTS| T
 ```
 
-All three implement the same `IVoiceManager` contract
+Both managers implement the same `IVoiceManager` contract
 (`start / pushAudio / cancel / destroy`) — the gateway never sees provider
-specifics. System prompt + a language-pinning instruction go to S2S models as
-`instructions`; the stt+tts path swaps the live LangGraph prompt instead.
+specifics. System prompt + a language-pinning instruction go to the S2S model as
+`instructions`; the model owns the LLM turn and the app LangGraph is bypassed.
 
 ## 3. Session sequence (S2S, e.g. OpenAI Realtime)
 
@@ -114,10 +113,6 @@ sequenceDiagram
     end
 ```
 
-The Sarvam (stt+tts) path differs only inside the manager: final transcript →
-gateway runs the LangGraph turn → token deltas are sentence-chunked → Bulbul
-TTS per sentence → same `tts_meta`+WAV frames to the client.
-
 ## 4. Voice previews (persona builder)
 
 ```mermaid
@@ -126,8 +121,7 @@ flowchart LR
     EP --> RS[resolve voice model] --> TTS{one-shot TTS}
     TTS -->|openai| T1[gpt-4o-mini-tts → mp3]
     TTS -->|gemini| T2[2.5-flash-preview-tts → wav]
-    TTS -->|sarvam| T3[Bulbul → wav]
-    T1 & T2 & T3 --> C[(in-memory cache<br/>per voice+language)] --> PB
+    T1 & T2 --> C[(in-memory cache<br/>per voice+language)] --> PB
 ```
 
 Sample text is localized (11 Indic languages + English). First play makes one
@@ -179,15 +173,15 @@ npm run dev                           # apps/api (and apps/web in another shell)
 Then one-time admin configuration in the UI:
 
 1. **LLM Ops → Providers → Add provider** — pick a master (OpenAI / Google /
-   Anthropic / Sarvam), paste the API key.
+   Anthropic), paste the API key.
 2. **LLM Ops → Models → Add model** — pick provider → Chat or Voice tab →
    pick from the catalog. First of each kind auto-primaries.
 3. **Persona builder → Voice** — optionally pin a voice model, pick a voice
    (▶ previews it), select trainee languages.
 
 Notes:
-- No new env vars. `SARVAM_API_KEY` still works as a legacy fallback, but the
-  registry key wins.
+- Voice = native S2S only (OpenAI Realtime, Gemini Live). Gemini Live covers the
+  Indic languages (hi/bn/ta/te/mr/gu/kn/ml); OpenAI Realtime is en/hi.
 - Add future catalog models without code changes:
   `npm run model:add -- --provider google --kind voice --key <model-id> --name "..." --pipeline s2s --languages en-IN,hi-IN`
 
@@ -199,7 +193,6 @@ Notes:
 | Factory (resolve + dispatch) | `apps/api/src/core/voice/voice-model-factory.service.ts` |
 | OpenAI Realtime (GA) | `apps/api/src/core/voice/managers/openai-realtime.manager.ts` |
 | Gemini Live | `apps/api/src/core/voice/managers/gemini-live.manager.ts` |
-| Sarvam turn loop | `apps/api/src/core/voice/voice-turn.manager.ts` |
 | Previews | `apps/api/src/core/voice/voice-preview.service.ts` |
 | Gateway wiring | `apps/api/src/modules/realtime/chat.gateway.ts` |
 | Registry API | `apps/api/src/modules/llm-ops/` |

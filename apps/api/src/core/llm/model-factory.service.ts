@@ -108,24 +108,34 @@ export class ModelFactoryService {
   private async loadModel(
     modelId: number | null | undefined,
   ): Promise<ModelRecord> {
+    const include = {
+      provider: { include: { masterProvider: { select: { adapterType: true } } } },
+    };
     // kind guard: a voice model id must never resolve as the chat engine.
-    const where = modelId
-      ? { id: modelId, kind: 'chat', provider: { isEnabled: true } }
-      : { isDefault: true, kind: 'chat', provider: { isEnabled: true } };
-    const model = await this.prisma.llmModel.findFirst({
-      where,
-      include: {
-        provider: { include: { masterProvider: { select: { adapterType: true } } } },
-      },
+    // A pinned model whose provider was disabled/swapped falls back to the
+    // primary instead of hard-failing the turn (registry-churn resilience).
+    if (modelId) {
+      const pinned = await this.prisma.llmModel.findFirst({
+        where: { id: modelId, kind: 'chat', provider: { isEnabled: true } },
+        include,
+      });
+      if (pinned) return pinned as ModelRecord;
+      this.logger.warn(
+        `Pinned chat model ${modelId} unavailable (disabled/removed) — falling back to primary`,
+      );
+    }
+    const primary = await this.prisma.llmModel.findFirst({
+      where: { isDefault: true, kind: 'chat', provider: { isEnabled: true } },
+      include,
     });
-    if (!model) {
+    if (!primary) {
       throw new DomainException(
         ErrorCode.PROVIDER_UNAVAILABLE,
         'No usable LLM model configured. Admin must register a provider key and promote a model via /llm.',
         HttpStatus.SERVICE_UNAVAILABLE,
       );
     }
-    return model as ModelRecord;
+    return primary as ModelRecord;
   }
 
   private getOrBuild(record: ModelRecord): BaseChatModel {
@@ -164,7 +174,7 @@ export class ModelFactoryService {
       });
     }
 
-    // openai | openrouter | azure_openai | sarvam | custom → OpenAI-compatible
+    // openai | openrouter | azure_openai | custom → OpenAI-compatible
     const baseURL =
       provider.baseUrl ?? (type === 'openrouter' ? OPENROUTER_BASE : undefined);
     return new ChatOpenAI({

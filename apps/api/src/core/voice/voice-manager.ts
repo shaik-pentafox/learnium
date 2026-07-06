@@ -1,19 +1,15 @@
 /**
- * Common contract every voice session manager implements, regardless of pipeline:
+ * Common contract every voice session manager implements.
  *
- *  - 'stt+tts' — {@link VoiceTurnManager}: STT stream → app LLM graph → TTS.
- *    The gateway drives the LLM and pipes token deltas back in via
- *    {@link IVoiceManager.onTokenDelta} / {@link IVoiceManager.onStreamEnd}.
- *
- *  - 's2s' — native speech-to-speech (OpenAI Realtime, Gemini Live): one upstream
- *    socket does STT+LLM+TTS in-model. The manager OWNS the LLM turn; the app
- *    graph is bypassed. Transcripts surface via {@link S2SCallbacks} so the
- *    gateway can persist ChatMessages and keep scoring working.
+ * Native speech-to-speech (OpenAI Realtime, Gemini Live): one upstream socket
+ * does STT+LLM+TTS in-model. The manager OWNS the LLM turn; the app graph is
+ * bypassed. Transcripts surface via {@link S2SCallbacks} so the gateway can
+ * persist ChatMessages and keep scoring working.
  *
  * The gateway holds managers only as this interface — never concrete classes.
  */
 export interface IVoiceManager {
-  readonly pipeline: 's2s' | 'stt+tts';
+  readonly pipeline: 's2s';
   /** Open upstream connection(s) and begin listening for user audio. */
   start(): Promise<void>;
   /** Feed one PCM16 mono 16kHz frame from the client mic. */
@@ -22,10 +18,6 @@ export interface IVoiceManager {
   cancel(): void;
   /** Tear down all upstream connections. Idempotent. */
   destroy(): Promise<void>;
-  /** stt+tts only — LLM token delta from the gateway-driven graph stream. */
-  onTokenDelta?(delta: string): void;
-  /** stt+tts only — gateway-driven graph stream ended. */
-  onStreamEnd?(): void;
 }
 
 /**

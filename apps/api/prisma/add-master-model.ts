@@ -15,7 +15,7 @@
  *   npm run model:add -- --provider openai --kind chat \
  *     --key gpt-5-mini --name "GPT-5 Mini" --ctx 400000 --in 0.25 --out 2
  *
- * --provider is the master provider KEY: openai | google | anthropic | sarvam.
+ * --provider is the master provider KEY: openai | google | anthropic.
  * --in/--out are $ per 1M tokens (text tokens for chat, audio tokens for voice).
  * After adding, the model appears in LLM Ops → Add model for any configured
  * provider of that master.
@@ -50,7 +50,7 @@ const csv = (v: string | undefined) =>
   v ? v.split(',').map((s) => s.trim()).filter(Boolean) : [];
 
 async function main() {
-  const providerKey = values.provider ?? fail('--provider is required (openai|google|anthropic|sarvam)');
+  const providerKey = values.provider ?? fail('--provider is required (openai|google|anthropic)');
   const kind = values.kind ?? fail('--kind is required (chat|voice)');
   const key = values.key ?? fail('--key is required (provider model id)');
   const name = values.name ?? key;
