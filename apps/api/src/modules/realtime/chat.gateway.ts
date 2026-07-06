@@ -232,6 +232,24 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     return parsed.success ? renderSystemPrompt(parsed.data) : persona.systemPrompt;
   }
 
+  /** Voice models drift toward their "helpful assistant" default far more than
+   *  text models — especially when mic noise/echo gets transcribed as user
+   *  speech. This block pins the customer role absolutely for S2S sessions. */
+  private voiceRoleLock(personaName?: string): string {
+    const name = personaName ? ` (${personaName})` : '';
+    return (
+      `\n\n# Voice role lock (absolute, non-negotiable)\n` +
+      `You are ONLY the customer${name}. The human you are speaking with is the support agent.\n` +
+      `- NEVER speak or act as an agent, assistant, or helper. Never say things like ` +
+      `"how may I help you", "thank you for calling", or offer support of any kind.\n` +
+      `- You are the one WITH the problem; the human is the one helping YOU.\n` +
+      `- If the audio is unclear, or you seem to hear your own words repeated back, ` +
+      `stay silent or ask the agent to repeat — never change roles.\n` +
+      `- Keep every reply SHORT and natural like a real phone call: 1–3 sentences, ` +
+      `then stop and let the agent respond.`
+    );
+  }
+
   private languageInstruction(bcp47: string): string {
     let langName: string;
     try {
@@ -555,7 +573,9 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     });
 
     const instructions =
-      (wsClient.baseSystemPrompt ?? '') + this.languageInstruction(languageCode);
+      (wsClient.baseSystemPrompt ?? '') +
+      this.languageInstruction(languageCode) +
+      this.voiceRoleLock(wsClient.personaName);
     // stt+tts runs through the graph — swap the live prompt for language pinning.
     // S2S managers get `instructions` directly and never touch the graph.
     if (wsClient.systemPromptHolder && wsClient.baseSystemPrompt) {

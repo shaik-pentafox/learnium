@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../core/database/prisma.service';
+import { VoiceModelFactory } from '../../core/voice/voice-model-factory.service';
 import {
   NotFoundException,
   ForbiddenException,
@@ -23,7 +24,27 @@ const PERSONA_INCLUDE = {
 
 @Injectable()
 export class PersonasService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly voiceFactory: VoiceModelFactory,
+  ) {}
+
+  /** Keep persona.languages consistent with its voice model AT WRITE TIME:
+   *  only codes the resolved model (pin, or the primary) supports are stored.
+   *  If no usable voice model resolves, languages pass through untouched —
+   *  a temporarily unconfigured registry must not wipe persona config. */
+  private async filterLanguagesForVoiceModel(
+    voiceModelId: number | null,
+    languages: string[],
+  ): Promise<string[]> {
+    if (languages.length === 0) return languages;
+    try {
+      const resolved = await this.voiceFactory.resolve(voiceModelId);
+      return languages.filter((l) => resolved.languages.includes(l));
+    } catch {
+      return languages;
+    }
+  }
 
   /** Owner (creator) or any super admin may mutate / test a persona. */
   private async assertCanManage(
@@ -169,6 +190,11 @@ export class PersonasService {
     const { scoreCriteria } = dto;
     // Render the runtime prompt cache from the structured template (source of truth).
     const systemPrompt = renderSystemPrompt(dto.template);
+    // Store only languages the selected voice model actually supports.
+    const languages =
+      dto.languages !== undefined
+        ? await this.filterLanguagesForVoiceModel(dto.voiceModelId ?? null, dto.languages)
+        : undefined;
 
     return this.prisma.$transaction(async (tx) => {
       const persona = await tx.persona.create({
@@ -182,7 +208,7 @@ export class PersonasService {
           ...(dto.voiceStyleId !== undefined ? { voiceStyleId: dto.voiceStyleId } : {}),
           ...(dto.voiceModelId !== undefined ? { voiceModelId: dto.voiceModelId } : {}),
           ...(dto.voiceId !== undefined ? { voiceId: dto.voiceId } : {}),
-          ...(dto.languages !== undefined ? { languages: dto.languages } : {}),
+          ...(languages !== undefined ? { languages } : {}),
           ...(dto.conversationModelId !== undefined ? { conversationModelId: dto.conversationModelId } : {}),
           ...(dto.scoringModelId !== undefined ? { scoringModelId: dto.scoringModelId } : {}),
           createdById,
@@ -224,7 +250,22 @@ export class PersonasService {
     if ('voiceStyleId' in personaData) data.voiceStyleId = personaData.voiceStyleId ?? null;
     if ('voiceModelId' in personaData) data.voiceModelId = personaData.voiceModelId ?? null;
     if ('voiceId' in personaData) data.voiceId = personaData.voiceId ?? null;
-    if (personaData.languages !== undefined) data.languages = personaData.languages;
+    // Languages are stored pre-filtered to the (possibly just-changed) voice
+    // model's catalog. A model change without a languages payload re-filters
+    // the existing set so stale unsupported codes drop off.
+    const effectiveVoiceModelId =
+      'voiceModelId' in personaData ? (personaData.voiceModelId ?? null) : existing.voiceModelId;
+    if (personaData.languages !== undefined) {
+      data.languages = await this.filterLanguagesForVoiceModel(
+        effectiveVoiceModelId,
+        personaData.languages,
+      );
+    } else if ('voiceModelId' in personaData) {
+      data.languages = await this.filterLanguagesForVoiceModel(
+        effectiveVoiceModelId,
+        existing.languages,
+      );
+    }
     if ('conversationModelId' in personaData) data.conversationModelId = personaData.conversationModelId ?? null;
     if ('scoringModelId' in personaData) data.scoringModelId = personaData.scoringModelId ?? null;
 

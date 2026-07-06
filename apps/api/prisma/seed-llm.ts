@@ -115,14 +115,8 @@ const MASTER_MODELS: SeedMasterModel[] = [
     providerKey: 'google', key: 'gemini-2.0-flash', name: 'Gemini 2.0 Flash', kind: 'chat',
     contextWindowTokens: 1_048_576, inputPricePerMillion: 0.1, outputPricePerMillion: 0.4,
   },
-  // ── Google voice (S2S Live API, prices per 1M audio tokens) ──
-  {
-    providerKey: 'google', key: 'gemini-2.0-flash-live-001', name: 'Gemini 2.0 Flash Live', kind: 'voice',
-    voicePipeline: 's2s',
-    inputPricePerMillion: 2.1, outputPricePerMillion: 8.5,
-    languages: ['en-IN', 'hi-IN', 'bn-IN', 'ta-IN', 'te-IN', 'mr-IN', 'gu-IN', 'kn-IN', 'ml-IN'],
-    voices: ['Puck', 'Charon', 'Kore', 'Fenrir', 'Aoede', 'Leda', 'Orus', 'Zephyr'],
-  },
+  // ── Google voice (S2S Live API, prices per 1M audio tokens).
+  //    gemini-2.0-flash-live-001 was deprecated — remapped to 3.1 below. ──
   {
     providerKey: 'google', key: 'gemini-2.5-flash-preview-native-audio-dialog', name: 'Gemini 2.5 Flash Native Audio', kind: 'voice',
     voicePipeline: 's2s',
@@ -173,24 +167,68 @@ const LEGACY_TYPE_TO_MASTER: Record<string, string> = {
 const RETIRED_MODEL_KEYS: Record<string, string> = {
   'gpt-4o-realtime-preview': 'gpt-realtime',
   'gpt-4o-mini-realtime-preview': 'gpt-realtime-mini',
+  'gemini-2.0-flash-live-001': 'gemini-3.1-flash-live-preview',
 };
+
+/** Remap one retired model key to its replacement. Handles both shapes:
+ *  simple rename when the replacement doesn't exist yet, or a merge (repoint
+ *  persona pins + primary flag, delete the retired rows) when it does. */
+async function remapRetiredModel(oldKey: string, newKey: string): Promise<void> {
+  const oldMasters = await prisma.masterModel.findMany({ where: { key: oldKey } });
+  const oldConfigured = await prisma.llmModel.findMany({ where: { name: oldKey } });
+  if (oldMasters.length === 0 && oldConfigured.length === 0) return;
+
+  for (const master of oldMasters) {
+    const targetMaster = await prisma.masterModel.findUnique({
+      where: { masterProviderId_key: { masterProviderId: master.masterProviderId, key: newKey } },
+    });
+    if (!targetMaster) {
+      await prisma.masterModel.update({ where: { id: master.id }, data: { key: newKey } });
+      continue;
+    }
+    // Replacement master already seeded → merge: repoint configured rows, drop old.
+    await prisma.llmModel.updateMany({
+      where: { masterModelId: master.id },
+      data: { masterModelId: targetMaster.id },
+    });
+    await prisma.masterModel.delete({ where: { id: master.id } });
+  }
+
+  for (const row of oldConfigured) {
+    const target = await prisma.llmModel.findUnique({ where: { name: newKey } });
+    if (!target) {
+      await prisma.llmModel.update({ where: { id: row.id }, data: { name: newKey } });
+      continue;
+    }
+    // A configured replacement already exists → merge into it, then delete.
+    await prisma.$transaction([
+      prisma.persona.updateMany({
+        where: { voiceModelId: row.id },
+        data: { voiceModelId: target.id },
+      }),
+      prisma.persona.updateMany({
+        where: { conversationModelId: row.id },
+        data: { conversationModelId: target.id },
+      }),
+      prisma.persona.updateMany({
+        where: { scoringModelId: row.id },
+        data: { scoringModelId: target.id },
+      }),
+      ...(row.isDefault
+        ? [prisma.llmModel.update({ where: { id: target.id }, data: { isDefault: true } })]
+        : []),
+      prisma.llmModel.delete({ where: { id: row.id } }),
+    ]);
+  }
+  console.log(`Remapped retired model ${oldKey} → ${newKey}`);
+}
 
 async function main() {
   // 0. Remap retired model keys BEFORE upserting, so the upsert updates the
   //    renamed row instead of creating a duplicate. Configured llm_models rows
-  //    carry the provider model id in `name` — rename those too.
+  //    carry the provider model id in `name` — those follow the remap too.
   for (const [oldKey, newKey] of Object.entries(RETIRED_MODEL_KEYS)) {
-    const renamedMasters = await prisma.masterModel.updateMany({
-      where: { key: oldKey },
-      data: { key: newKey },
-    });
-    const renamedConfigured = await prisma.llmModel.updateMany({
-      where: { name: oldKey },
-      data: { name: newKey },
-    });
-    if (renamedMasters.count > 0 || renamedConfigured.count > 0) {
-      console.log(`Remapped retired model ${oldKey} → ${newKey}`);
-    }
+    await remapRetiredModel(oldKey, newKey);
   }
 
   // 1. Masters (upsert by key — re-running refreshes the catalog).

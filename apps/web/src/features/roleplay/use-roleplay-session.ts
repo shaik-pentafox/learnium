@@ -147,6 +147,10 @@ export function useRoleplaySession(sessionUid: string): RoleplaySession {
         playerRef.current.stop()
         break
       case 'stt_partial':
+        // User is speaking. If agent audio is still playing (or queued), this
+        // is a barge-in — cut playback so the agent stops and listens.
+        // Provider-agnostic net alongside the server's tts_stop.
+        if (playerRef.current.isPlaying) playerRef.current.stop()
         setSttCaption(msg.text)
         break
       case 'stt_final':

@@ -1,8 +1,9 @@
 /**
  * AudioWorklet processor — converts Float32 PCM (from getUserMedia) to Int16 PCM
- * at whatever sample rate the AudioContext was created with (we force 16 kHz so
- * the browser resamples automatically). Transfers the Int16 buffer to the main
- * thread on each process() call; zero extra allocation there.
+ * at the AudioContext's native sample rate. The main thread downsamples to the
+ * wire rate (16 kHz); forcing a 16 kHz context here triggered macOS/Chromium
+ * mixed-sample-rate bugs that pitch-shifted OTHER contexts' output.
+ * Transfers the Int16 buffer to the main thread on each process() call.
  */
 class PcmProcessor extends AudioWorkletProcessor {
   process(inputs) {

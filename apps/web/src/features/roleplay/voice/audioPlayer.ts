@@ -1,46 +1,65 @@
 /**
- * Sequential Web Audio playback queue for TTS audio frames.
+ * Gapless Web Audio playback for streamed TTS frames.
  *
- * Each `enqueue` call decodes a WAV/PCM ArrayBuffer and appends it to the
- * queue. Buffers play back-to-back without gaps. Call `stop()` for barge-in
- * (clears the queue and stops the current source immediately).
+ * Frames are decoded in arrival order and scheduled back-to-back on the
+ * AudioContext clock (`source.start(at)` where `at` = end of the previous
+ * buffer) — NOT chained via `onended`, whose main-thread latency leaves an
+ * audible gap at every frame boundary (choppy speech). Call `stop()` for
+ * barge-in: all scheduled sources are killed immediately.
  *
- * AudioContext is created lazily on the first enqueue (post-user-gesture) and
- * resumed automatically if the browser suspends it.
+ * Output goes straight to `ctx.destination`. A MediaStreamDestination →
+ * <audio> element route was tried for echo cancellation (Chromium AEC only
+ * references media-element output), but Chrome's live-stream drift
+ * compensation progressively time-stretched playback (low/slow voice after
+ * the first turn). Echo robustness is handled server-side by the VAD
+ * threshold instead.
  */
+/** Seconds of lead when playback (re)starts — a jitter buffer that absorbs
+ *  late frames (a hairline lead turns every late frame into an audible gap). */
+const RESTART_LEAD_S = 0.15
+
 export class AudioPlayer {
   private ctx: AudioContext | null = null
-  private queue: AudioBuffer[] = []
-  private playing = false
-  private currentSource: AudioBufferSourceNode | null = null
 
-  /** Unlock the AudioContext on a user gesture (call on mic button click). */
+  /** Live (scheduled or playing) sources — killed on stop(). */
+  private readonly sources = new Set<AudioBufferSourceNode>()
+  /** AudioContext time where the next buffer should begin. */
+  private nextTime = 0
+  /** Serializes async decodes so frames schedule in arrival order. */
+  private chain: Promise<void> = Promise.resolve()
+  /** Bumped on stop() so frames decoding across a barge-in never schedule. */
+  private epoch = 0
+
+  /** Unlock audio output on a user gesture (call on mic button click). */
   resume(): void {
     void this.ctx?.resume()
   }
 
+  /** True while any buffer is playing or scheduled. */
+  get isPlaying(): boolean {
+    return this.sources.size > 0
+  }
+
   async enqueue(bytes: ArrayBuffer): Promise<void> {
-    const ctx = this.ensureCtx()
-    if (ctx.state === 'suspended') await ctx.resume()
-    try {
-      // slice(0) to clone — decodeAudioData detaches the buffer
-      const buffer = await ctx.decodeAudioData(bytes.slice(0))
-      this.queue.push(buffer)
-      if (!this.playing) this.playNext()
-    } catch (err) {
-      console.error('[AudioPlayer] decode failed:', err)
-    }
+    this.chain = this.chain
+      .then(() => this.decodeAndSchedule(bytes))
+      .catch((err) => console.error('[AudioPlayer] frame failed:', err))
+    return this.chain
   }
 
   stop(): void {
-    this.queue = []
-    try {
-      this.currentSource?.stop()
-    } catch {
-      // already stopped
+    for (const source of this.sources) {
+      try {
+        source.stop()
+      } catch {
+        // already stopped
+      }
     }
-    this.currentSource = null
-    this.playing = false
+    this.sources.clear()
+    this.nextTime = 0
+    // Drop queued frames and invalidate any decode already in flight.
+    this.chain = Promise.resolve()
+    this.epoch++
   }
 
   destroy(): void {
@@ -49,27 +68,53 @@ export class AudioPlayer {
     this.ctx = null
   }
 
-  private ensureCtx(): AudioContext {
-    if (!this.ctx || this.ctx.state === 'closed') {
-      this.ctx = new AudioContext()
-    }
-    return this.ctx
-  }
-
-  private playNext(): void {
-    const buffer = this.queue.shift()
-    if (!buffer) {
-      this.playing = false
-      this.currentSource = null
-      return
-    }
+  private async decodeAndSchedule(bytes: ArrayBuffer): Promise<void> {
+    const epoch = this.epoch
     const ctx = this.ensureCtx()
+    if (ctx.state === 'suspended') await ctx.resume()
+    // Manual WAV→AudioBuffer parse: our frames are always PCM16 mono WAV, and
+    // building the buffer at the header's exact sample rate removes any
+    // decodeAudioData resampling/pitch ambiguity across devices.
+    const buffer = this.wavToBuffer(ctx, bytes)
+    if (!buffer) return
+    if (epoch !== this.epoch) return // barge-in happened while decoding
+
     const source = ctx.createBufferSource()
     source.buffer = buffer
     source.connect(ctx.destination)
-    source.onended = () => this.playNext()
-    this.currentSource = source
-    this.playing = true
-    source.start()
+    // Splice exactly onto the end of the previous buffer. When the pipeline
+    // (re)starts — first frame, or the queue ran dry — lead by 150ms as a
+    // jitter buffer: with a hairline lead, any frame arriving a beat late
+    // lands as an audible gap (choppy/robotic speech on jittery networks).
+    const startAt = Math.max(this.nextTime, ctx.currentTime + RESTART_LEAD_S)
+    this.nextTime = startAt + buffer.duration
+    this.sources.add(source)
+    source.onended = () => this.sources.delete(source)
+    source.start(startAt)
+  }
+
+  /** Parse a PCM16 mono WAV frame into an AudioBuffer at its native rate. */
+  private wavToBuffer(ctx: AudioContext, bytes: ArrayBuffer): AudioBuffer | null {
+    if (bytes.byteLength <= 44) return null
+    const view = new DataView(bytes)
+    // RIFF sanity check — fall through silently on anything unexpected.
+    if (view.getUint32(0, false) !== 0x52494646 /* 'RIFF' */) return null
+    const sampleRate = view.getUint32(24, true)
+    const samples = Math.floor((bytes.byteLength - 44) / 2)
+    if (sampleRate < 8000 || samples === 0) return null
+    const buffer = ctx.createBuffer(1, samples, sampleRate)
+    const ch = buffer.getChannelData(0)
+    for (let i = 0; i < samples; i++) {
+      ch[i] = view.getInt16(44 + i * 2, true) / 32768
+    }
+    return buffer
+  }
+
+  private ensureCtx(): AudioContext {
+    if (!this.ctx || this.ctx.state === 'closed') {
+      this.ctx = new AudioContext()
+      this.nextTime = 0
+    }
+    return this.ctx
   }
 }
