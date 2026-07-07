@@ -49,7 +49,12 @@ export const EnvSchema = z.object({
   // LangSmith (LangChain/LangGraph tracing + evals). Off by default. When
   // enabled, prompts + completions are sent to LangSmith — a data-governance
   // decision; keep off in prod unless deliberately approved. See docs/LANGSMITH_SETUP.md.
-  LANGSMITH_TRACING: z.coerce.boolean().default(false),
+  // z.coerce.boolean() treats any non-empty string ("false" included) as true —
+  // parse the string explicitly instead.
+  LANGSMITH_TRACING: z
+    .string()
+    .default('false')
+    .transform((v) => v === 'true' || v === '1'),
   LANGSMITH_API_KEY: z.string().optional(),
   LANGSMITH_PROJECT: z.string().default('traineon'),
   LANGSMITH_ENDPOINT: z.string().url().default('https://api.smith.langchain.com'),

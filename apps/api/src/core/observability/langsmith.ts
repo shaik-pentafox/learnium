@@ -7,12 +7,11 @@ import type { Env } from '../config/env.schema';
  *
  * LangChain reads tracing config from `process.env` at model-construction time
  * (not via Nest DI). Our chat models are built lazily on first resolve, so
- * setting the canonical `LANGCHAIN_*` vars here — during bootstrap, before any
- * request — is early enough for every trace to be captured.
+ * exporting the `LANGSMITH_*` vars here — during bootstrap, before any request —
+ * is early enough for every trace to be captured.
  *
- * We read our own validated `LANGSMITH_*` env (typed, documented) and map it to
- * the `LANGCHAIN_*` names the tracer reads, so the surface stays stable even if
- * LangChain's alias handling drifts.
+ * We validate them through our own typed env schema first, then re-export them
+ * so the tracer (which only reads raw `process.env`) sees the same values.
  *
  * Governance: when enabled, prompts + completions leave our infra for LangSmith.
  * With BYOK keys + roleplay content that is a deliberate call — keep it off in
@@ -36,11 +35,11 @@ export function configureLangSmith(config: ConfigService<Env, true>): void {
   const project = config.get('LANGSMITH_PROJECT', { infer: true });
   const endpoint = config.get('LANGSMITH_ENDPOINT', { infer: true });
 
-  // Canonical vars the LangChain tracer reads. Set both the v2 flag and the key.
-  process.env.LANGCHAIN_TRACING_V2 = 'true';
-  process.env.LANGCHAIN_API_KEY = apiKey;
-  process.env.LANGCHAIN_PROJECT = project;
-  process.env.LANGCHAIN_ENDPOINT = endpoint;
+  // Canonical vars the langsmith SDK (>=0.3) / @langchain/core 1.x tracer reads.
+  process.env.LANGSMITH_TRACING = 'true';
+  process.env.LANGSMITH_API_KEY = apiKey;
+  process.env.LANGSMITH_PROJECT = project;
+  process.env.LANGSMITH_ENDPOINT = endpoint;
 
   logger.log(`Tracing enabled → project "${project}" (${endpoint})`);
 }
