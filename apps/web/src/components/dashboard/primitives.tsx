@@ -3,6 +3,7 @@ import { Link } from '@tanstack/react-router'
 import { ArrowRight } from 'lucide-react'
 import { animate } from 'motion/react'
 import { cn } from '@/lib/utils'
+import { ErrorState } from '@/components/ui/error-state'
 
 /** "View all →" link to a Report tab, used as a Tile action on previews. */
 export function ViewAll({ tab }: { tab: string }) {
@@ -202,16 +203,5 @@ export function DashboardSkeleton() {
 }
 
 export function DashboardError({ onRetry }: { onRetry: () => void }) {
-  return (
-    <div className="rounded-lg border border-border bg-surface p-4 text-sm">
-      <p className="text-destructive">Couldn’t load your dashboard.</p>
-      <button
-        type="button"
-        onClick={onRetry}
-        className="mt-2 text-primary hover:underline"
-      >
-        Retry
-      </button>
-    </div>
-  )
+  return <ErrorState title="Couldn’t load your dashboard" onRetry={onRetry} />
 }

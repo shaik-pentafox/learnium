@@ -11,6 +11,7 @@ import { personaOrbColors } from '@/lib/persona-color'
 import { notify } from '@/lib/toast'
 import { useAuthStore } from '@/stores/auth'
 import { Button } from '@/components/ui/button'
+import { ErrorState } from '@/components/ui/error-state'
 import { Orb } from '@/components/chat/orb'
 import { Mic } from 'lucide-react'
 import {
@@ -100,18 +101,7 @@ function PracticeLauncher() {
       </header>
 
       {isPending && <LauncherSkeleton />}
-      {isError && (
-        <div className="rounded-lg border border-border bg-surface p-4 text-sm">
-          <p className="text-destructive">Couldn't load personas.</p>
-          <button
-            type="button"
-            onClick={() => refetch()}
-            className="mt-2 text-primary hover:underline"
-          >
-            Retry
-          </button>
-        </div>
-      )}
+      {isError && <ErrorState title="Couldn't load personas" onRetry={() => refetch()} />}
 
       {data && data.personas.length === 0 && (
         <p className="rounded-lg border border-border bg-surface px-4 py-6 text-sm text-muted-foreground">

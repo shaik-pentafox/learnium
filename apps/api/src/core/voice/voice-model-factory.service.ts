@@ -8,6 +8,7 @@ import type { Env } from '../config/env.schema';
 import type { IVoiceManager, S2SCallbacks } from './voice-manager';
 import { OpenAIRealtimeManager } from './managers/openai-realtime.manager';
 import { GeminiLiveManager } from './managers/gemini-live.manager';
+import { ProviderBudgetService } from '../llm/provider-budget.service';
 
 /** A voice model resolved from the registry, ready for manager construction. */
 export interface ResolvedVoiceModel {
@@ -46,6 +47,7 @@ export class VoiceModelFactory {
   constructor(
     private readonly prisma: PrismaService,
     private readonly config: ConfigService<Env, true>,
+    private readonly budget: ProviderBudgetService,
   ) {}
 
   /** Pinned voice model (persona.voiceModelId) or the primary voice model.
@@ -81,6 +83,12 @@ export class VoiceModelFactory {
         HttpStatus.SERVICE_UNAVAILABLE,
       );
     }
+    // Stop resolving the voice model once the provider's monthly budget is spent.
+    await this.budget.assertWithinBudget(
+      model.provider.id,
+      model.provider.monthlyBudgetUsd,
+    );
+
     const apiKey = model.provider.credentialRef
       ? decryptSecret(
           model.provider.credentialRef,

@@ -11,10 +11,12 @@ import { routeTree } from './routeTree.gen'
 import { queryClient } from '@/lib/query-client'
 import { useUiStore } from '@/stores/ui'
 import { restoreSession } from '@/services/auth'
+import { RouteError } from '@/components/route-error'
 
 const router = createRouter({
   routeTree,
   defaultPreload: 'intent',
+  defaultErrorComponent: ({ error, reset }) => <RouteError error={error} reset={reset} />,
   context: { queryClient },
 })
 

@@ -33,7 +33,8 @@ export interface PersonaTemplate {
   company: string
   productContext?: string
   issue: string
-  channel: Channel
+  /** Modalities the persona supports — text chat, voice call, or both. */
+  channels: Channel[]
   // ── Emotion ──
   emotion: Emotion
   intensity: number
@@ -73,6 +74,9 @@ export interface PersonaSummary {
   readonly?: boolean
   /** BCP-47 language codes configured for voice sessions. Empty = text-only. */
   languages?: string[]
+  /** Structured authoring fields — carried in the list payload; used to tell
+   *  whether voice is enabled (`channels` includes 'audio'). */
+  templateData?: PersonaTemplate | null
 }
 
 export interface Persona {
@@ -182,7 +186,7 @@ function buildTemplatePayload(t: PersonaTemplate): PersonaTemplate {
     customerProfile: t.customerProfile.trim(),
     company: t.company.trim(),
     issue: t.issue.trim(),
-    channel: t.channel,
+    channels: t.channels.length ? t.channels : ['chat'],
     emotion: t.emotion,
     intensity: t.intensity,
     desiredOutcome: t.desiredOutcome.trim(),

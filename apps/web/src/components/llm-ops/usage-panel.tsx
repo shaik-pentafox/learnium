@@ -7,6 +7,7 @@ import {
   llmKeys,
   type UsageRow,
 } from '@/services/llm'
+import { ErrorState } from '@/components/ui/error-state'
 import { DataTable } from '@/components/shared/data-table'
 import { FacetFilter } from '@/components/shared/facet-filter'
 
@@ -85,16 +86,7 @@ export function UsagePanel() {
           ))}
         </div>
       ) : usage.isError ? (
-        <div className="rounded-lg border border-border bg-surface p-4 text-sm">
-          <p className="text-destructive">Couldn’t load usage.</p>
-          <button
-            type="button"
-            onClick={() => usage.refetch()}
-            className="mt-2 text-primary hover:underline"
-          >
-            Retry
-          </button>
-        </div>
+        <ErrorState title="Couldn’t load usage" onRetry={() => usage.refetch()} />
       ) : (
         <>
           <div className="grid gap-4 sm:grid-cols-3">

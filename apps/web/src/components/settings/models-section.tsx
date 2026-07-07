@@ -1,9 +1,18 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Plus, Star, MessageSquare, Mic } from 'lucide-react'
-import { listModels, promoteModel, llmKeys, type LlmModel } from '@/services/llm'
+import { Plus, Star, MessageSquare, Mic, Trash2 } from 'lucide-react'
+import { listModels, promoteModel, deleteModel, llmKeys, type LlmModel } from '@/services/llm'
 import { notify } from '@/lib/toast'
 import { Button } from '@/components/ui/button'
+import { ErrorState } from '@/components/ui/error-state'
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from '@/components/ui/dialog'
 import { SettingsSection } from '@/components/settings/settings-section'
 import { AddModelDialog } from '@/components/llm-ops/add-model-dialog'
 
@@ -11,12 +20,23 @@ export function ModelsSection() {
   const queryClient = useQueryClient()
   const models = useQuery({ queryKey: llmKeys.models(), queryFn: () => listModels() })
   const [adding, setAdding] = useState(false)
+  const [deleting, setDeleting] = useState<LlmModel | null>(null)
 
   const promote = useMutation({
     mutationFn: (id: number) => promoteModel(id),
     onSuccess: (r) => {
       queryClient.invalidateQueries({ queryKey: llmKeys.models() })
       notify.success(`Primary ${r.kind} model updated`)
+    },
+    onError: (err) => notify.error(err),
+  })
+
+  const remove = useMutation({
+    mutationFn: (id: number) => deleteModel(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: llmKeys.models() })
+      notify.success('Model removed')
+      setDeleting(null)
     },
     onError: (err) => notify.error(err),
   })
@@ -56,15 +76,8 @@ export function ModelsSection() {
             )}
             {models.isError && (
               <tr>
-                <td colSpan={5} className="px-6 py-6 text-sm">
-                  <span className="text-destructive">Couldn’t load models.</span>{' '}
-                  <button
-                    type="button"
-                    onClick={() => models.refetch()}
-                    className="text-primary hover:underline"
-                  >
-                    Retry
-                  </button>
+                <td colSpan={5} className="px-6 py-6">
+                  <ErrorState title="Couldn’t load models" onRetry={() => models.refetch()} />
                 </td>
               </tr>
             )}
@@ -74,6 +87,7 @@ export function ModelsSection() {
                 model={m}
                 onPromote={() => promote.mutate(m.id)}
                 promoting={promote.isPending && promote.variables === m.id}
+                onDelete={() => setDeleting(m)}
               />
             ))}
             {models.data && models.data.length === 0 && (
@@ -86,6 +100,31 @@ export function ModelsSection() {
           </tbody>
         </table>
       </div>
+
+      <Dialog open={deleting !== null} onOpenChange={(v) => { if (!v) setDeleting(null) }}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Remove model?</DialogTitle>
+            <DialogDescription>
+              <span className="font-data">{deleting?.name}</span> will be removed.
+              Personas pinned to it fall back to the primary {deleting?.kind} model.
+              {deleting?.isDefault && ' This is the current primary — a replacement will be promoted automatically.'}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="secondary" onClick={() => setDeleting(null)}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => deleting && remove.mutate(deleting.id)}
+              disabled={remove.isPending}
+            >
+              {remove.isPending ? 'Removing…' : 'Remove'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </SettingsSection>
   )
 }
@@ -94,9 +133,10 @@ interface ModelRowProps {
   model: LlmModel
   onPromote: () => void
   promoting: boolean
+  onDelete: () => void
 }
 
-function ModelRow({ model, onPromote, promoting }: ModelRowProps) {
+function ModelRow({ model, onPromote, promoting, onDelete }: ModelRowProps) {
   return (
     <tr className="border-b border-border last:border-0">
       <td className="px-6 py-3">
@@ -140,6 +180,16 @@ function ModelRow({ model, onPromote, promoting }: ModelRowProps) {
               {promoting ? 'Setting…' : 'Set primary'}
             </Button>
           )}
+          <Button
+            variant="ghost"
+            size="icon"
+            className="size-7 text-muted-foreground hover:text-destructive"
+            onClick={onDelete}
+            aria-label={`Remove ${model.name}`}
+            title="Remove model"
+          >
+            <Trash2 className="size-3.5" />
+          </Button>
         </div>
       </td>
     </tr>

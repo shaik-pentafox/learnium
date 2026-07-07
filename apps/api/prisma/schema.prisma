@@ -197,6 +197,7 @@ model LlmUsage {
   totalTokens  Int      @default(0)
   costUsd      Float    @default(0)
   estimated    Boolean  @default(false) // tokens approximated (provider returned no usage)
+  isSimulation Boolean  @default(false) // usage from a persona test/sim session — excluded from cost analytics
   latencyMs    Int?
   createdAt    DateTime @default(now())
 

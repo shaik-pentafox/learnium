@@ -7,6 +7,8 @@ export interface VoiceStyleOption {
   name: string
   voiceId: string
   provider: string
+  /** Perceived voice gender for filtering by persona. Null = unspecified (any). */
+  gender?: 'male' | 'female' | null
 }
 
 /** GET /voice/voices — voices of the resolved voice model (pin or primary). */

@@ -20,6 +20,8 @@ export interface RecordUsageInput {
   inputTokens: number;
   outputTokens: number;
   estimated: boolean;
+  /** Usage from a persona test/simulation session — excluded from cost analytics. */
+  isSimulation?: boolean;
   latencyMs?: number;
 }
 
@@ -81,6 +83,7 @@ export class UsageService {
           totalTokens: input.inputTokens + input.outputTokens,
           costUsd,
           estimated: input.estimated,
+          isSimulation: input.isSimulation ?? false,
           latencyMs: input.latencyMs ?? null,
         },
       });
@@ -122,7 +125,8 @@ export class UsageService {
     const since = query.from
       ? new Date(query.from)
       : new Date(until.getTime() - (query.days ?? 30) * 86_400_000);
-    const where = { createdAt: { gte: since, lte: until } };
+    // Exclude persona test/sim usage from all cost analytics.
+    const where = { createdAt: { gte: since, lte: until }, isSimulation: false };
 
     const groupArgs = {
       where,
@@ -191,6 +195,7 @@ export class UsageService {
     model: string[];
   }) {
     const where: Prisma.LlmUsageWhereInput = {
+      isSimulation: false,
       ...(query.kind.length ? { kind: { in: query.kind } } : {}),
       ...(query.model.length ? { modelName: { in: query.model } } : {}),
     };
@@ -242,7 +247,7 @@ export class UsageService {
              COALESCE(SUM("totalTokens"), 0)::int AS "totalTokens",
              COALESCE(SUM("costUsd"), 0)::float8 AS "costUsd"
       FROM llm_usage
-      WHERE "createdAt" >= ${since} AND "createdAt" <= ${until}
+      WHERE "createdAt" >= ${since} AND "createdAt" <= ${until} AND "isSimulation" = false
       GROUP BY day, key
       ORDER BY day ASC
     `;
@@ -266,7 +271,7 @@ export class UsageService {
              COALESCE(SUM("totalTokens"), 0)::int AS "totalTokens",
              COALESCE(SUM("costUsd"), 0)::float8 AS "costUsd"
       FROM llm_usage
-      WHERE "createdAt" >= ${since} AND "createdAt" <= ${until}
+      WHERE "createdAt" >= ${since} AND "createdAt" <= ${until} AND "isSimulation" = false
       GROUP BY day
       ORDER BY day ASC
     `;

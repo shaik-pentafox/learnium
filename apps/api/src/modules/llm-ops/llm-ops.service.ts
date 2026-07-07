@@ -6,7 +6,7 @@ import { PrismaService } from '../../core/database/prisma.service';
 import { NotFoundException, ValidationException } from '../../core/errors/domain.errors';
 import { REDIS_CLIENT } from '../../core/redis/redis.module';
 import { MODEL_CACHE_CHANNEL } from '../../core/llm/model-factory.service';
-import { encryptSecret } from '../../core/crypto/crypto.util';
+import { encryptSecret, decryptSecret } from '../../core/crypto/crypto.util';
 import type { Env } from '../../core/config/env.schema';
 import type {
   CreateProviderDto,
@@ -94,18 +94,35 @@ export class LlmOpsService {
   }
 
   async createProvider(dto: CreateProviderDto) {
-    const master = await this.prisma.masterProvider.findUnique({
-      where: { id: dto.masterProviderId },
-    });
-    if (!master) throw new NotFoundException('MasterProvider', dto.masterProviderId);
+    // Two paths: pick a seeded master, or declare a custom provider (no master).
+    let name: string;
+    let type: string;
+    let masterProviderId: number | null;
+    let baseUrl: string | null;
+    if (dto.masterProviderId != null) {
+      const master = await this.prisma.masterProvider.findUnique({
+        where: { id: dto.masterProviderId },
+      });
+      if (!master) throw new NotFoundException('MasterProvider', dto.masterProviderId);
+      name = dto.name ?? master.name;
+      type = master.adapterType;
+      masterProviderId = master.id;
+      baseUrl = dto.baseUrl ?? master.defaultBaseUrl;
+    } else {
+      // Custom provider — the DTO refine guarantees adapterType + name are set.
+      name = dto.name!;
+      type = dto.adapterType!;
+      masterProviderId = null;
+      baseUrl = dto.baseUrl ?? null;
+    }
 
     const provider = await this.prisma.llmProvider.create({
       data: {
-        name: dto.name ?? master.name,
-        type: master.adapterType,
-        masterProviderId: master.id,
+        name,
+        type,
+        masterProviderId,
         isEnabled: dto.isEnabled,
-        baseUrl: dto.baseUrl ?? master.defaultBaseUrl,
+        baseUrl,
         credentialRef: this.encrypt(dto.apiKey),
         credentialHint: credentialHint(dto.apiKey),
         monthlyBudgetUsd: dto.monthlyBudgetUsd ?? null,
@@ -154,6 +171,66 @@ export class LlmOpsService {
     return provider;
   }
 
+  /** Live key/connectivity probe for a configured provider. Hits the provider's
+   *  model-list endpoint with the stored key (no token spend), per adapter, so a
+   *  bad key surfaces here instead of at first chat. */
+  async testProvider(
+    id: number,
+  ): Promise<{ ok: boolean; status?: number; message: string }> {
+    const provider = await this.assertProvider(id);
+    const apiKey = provider.credentialRef
+      ? decryptSecret(
+          provider.credentialRef,
+          this.config.get('CREDENTIAL_ENCRYPTION_KEY', { infer: true }),
+        )
+      : null;
+    const { url, headers } = this.buildProviderProbe(
+      provider.type.toLowerCase(),
+      provider.baseUrl,
+      apiKey,
+    );
+    try {
+      const res = await fetch(url, { method: 'GET', headers });
+      if (res.ok) return { ok: true, status: res.status, message: 'Connection OK' };
+      const body = await res.text().catch(() => '');
+      return {
+        ok: false,
+        status: res.status,
+        message: `Provider rejected the request (HTTP ${res.status})${body ? `: ${body.slice(0, 200)}` : ''}`,
+      };
+    } catch (err) {
+      return {
+        ok: false,
+        message: err instanceof Error ? err.message : 'Connection failed',
+      };
+    }
+  }
+
+  /** Per-adapter model-list probe URL + auth headers (no request body). */
+  private buildProviderProbe(
+    adapter: string,
+    baseUrl: string | null,
+    apiKey: string | null,
+  ): { url: string; headers: Record<string, string> } {
+    if (adapter === 'gemini') {
+      const base = baseUrl ?? 'https://generativelanguage.googleapis.com';
+      return { url: `${base.replace(/\/$/, '')}/v1beta/models?key=${apiKey ?? ''}`, headers: {} };
+    }
+    if (adapter === 'anthropic') {
+      const base = baseUrl ?? 'https://api.anthropic.com';
+      return {
+        url: `${base.replace(/\/$/, '')}/v1/models`,
+        headers: { 'x-api-key': apiKey ?? '', 'anthropic-version': '2023-06-01' },
+      };
+    }
+    // openai | openrouter | azure_openai | custom → OpenAI-compatible /models
+    const base = baseUrl ?? 'https://api.openai.com/v1';
+    return {
+      url: `${base.replace(/\/$/, '')}/models`,
+      headers: apiKey ? { authorization: `Bearer ${apiKey}` } : {},
+    };
+  }
+
   /** After a provider becomes unavailable, ensure each kind still has a primary
    *  model on an ENABLED provider — promote a replacement if the old default was
    *  orphaned. Keeps model/voice resolution working after a disable/swap. */
@@ -199,40 +276,90 @@ export class LlmOpsService {
    *  copied from the master; the first enabled model of a kind auto-primaries. */
   async createModel(dto: CreateModelDto) {
     const provider = await this.assertProvider(dto.providerId);
-    const master = await this.prisma.masterModel.findUnique({
-      where: { id: dto.masterModelId },
-    });
-    if (!master) throw new NotFoundException('MasterModel', dto.masterModelId);
-    if (provider.masterProviderId !== master.masterProviderId) {
-      throw new ValidationException(
-        'Selected model does not belong to this provider’s catalog',
-      );
+
+    // Resolve the row's metadata from either the master catalog or the custom
+    // fields on the DTO (refine guarantees name + kind when no master).
+    let name: string;
+    let kind: string;
+    let capabilities: string[];
+    let masterModelId: number | null;
+    let contextWindowTokens: number | null;
+    let inputPricePerMillion: number | null;
+    let outputPricePerMillion: number | null;
+
+    if (dto.masterModelId != null) {
+      const master = await this.prisma.masterModel.findUnique({
+        where: { id: dto.masterModelId },
+      });
+      if (!master) throw new NotFoundException('MasterModel', dto.masterModelId);
+      if (provider.masterProviderId !== master.masterProviderId) {
+        throw new ValidationException(
+          'Selected model does not belong to this provider’s catalog',
+        );
+      }
+      name = master.key;
+      kind = master.kind;
+      capabilities = master.kind === 'voice' ? ['voice'] : ['conversation', 'scoring'];
+      masterModelId = master.id;
+      contextWindowTokens = master.contextWindowTokens;
+      inputPricePerMillion = master.inputPricePerMillion;
+      outputPricePerMillion = master.outputPricePerMillion;
+    } else {
+      // Custom model — voice is unsupported: the voice factory reads languages +
+      // voices from the master catalog, which a custom row has none of.
+      if (dto.kind === 'voice') {
+        throw new ValidationException(
+          'Custom voice models are not supported — add the voice model to the master catalog first',
+        );
+      }
+      name = dto.name!;
+      kind = dto.kind!;
+      capabilities = dto.capabilities ?? ['conversation', 'scoring'];
+      masterModelId = null;
+      contextWindowTokens = dto.contextWindowTokens ?? null;
+      inputPricePerMillion = dto.inputPricePerMillion ?? null;
+      outputPricePerMillion = dto.outputPricePerMillion ?? null;
     }
 
     // Auto-primary: first model of its kind claims the default slot.
-    const sameKindCount = await this.prisma.llmModel.count({
-      where: { kind: master.kind },
-    });
-    const isDefault = dto.isDefault || sameKindCount === 0;
+    const sameKindCount = await this.prisma.llmModel.count({ where: { kind } });
+    const wantsDefault = dto.isDefault || sameKindCount === 0;
 
-    const create = this.prisma.llmModel.create({
-      data: {
-        name: master.key,
-        providerId: provider.id,
-        masterModelId: master.id,
-        kind: master.kind,
-        capabilities: master.kind === 'voice' ? ['voice'] : ['conversation', 'scoring'],
-        isDefault,
-        contextWindowTokens: master.contextWindowTokens,
-        inputPricePerMillion: master.inputPricePerMillion,
-        outputPricePerMillion: master.outputPricePerMillion,
-      },
-      include: { masterModel: { select: MASTER_MODEL_SELECT } },
-    });
-    // Exactly one default per kind: clear same-kind rows when this one claims it.
-    const [, model] = isDefault
-      ? await this.prisma.$transaction([this.clearDefaults(master.kind), create])
-      : [null, await create];
+    const doCreate = (asDefault: boolean) =>
+      this.prisma.llmModel.create({
+        data: {
+          name,
+          providerId: provider.id,
+          masterModelId,
+          kind,
+          capabilities,
+          isDefault: asDefault,
+          contextWindowTokens,
+          inputPricePerMillion,
+          outputPricePerMillion,
+        },
+        include: { masterModel: { select: MASTER_MODEL_SELECT } },
+      });
+
+    let model;
+    try {
+      // Exactly one default per kind: clear same-kind rows when this one claims it.
+      [, model] = wantsDefault
+        ? await this.prisma.$transaction([this.clearDefaults(kind), doCreate(true)])
+        : [null, await doCreate(false)];
+    } catch (err) {
+      // The partial unique index (one default per kind) rejected a concurrent
+      // race for the primary slot — still add the model, just not as primary.
+      if (
+        wantsDefault &&
+        err instanceof Prisma.PrismaClientKnownRequestError &&
+        err.code === 'P2002'
+      ) {
+        model = await doCreate(false);
+      } else {
+        throw err;
+      }
+    }
     await this.invalidateModelCache();
     return model;
   }
@@ -268,9 +395,44 @@ export class LlmOpsService {
     });
   }
 
+  /** Remove a model. Persona references to it are nulled first (so those personas
+   *  fall back to the primary of that kind — the same graceful path as a disabled
+   *  provider); if the removed model was a primary, a replacement is promoted. */
+  async deleteModel(id: number) {
+    const model = await this.assertModel(id);
+    await this.prisma.$transaction([
+      this.prisma.persona.updateMany({
+        where: { conversationModelId: id },
+        data: { conversationModelId: null },
+      }),
+      this.prisma.persona.updateMany({
+        where: { scoringModelId: id },
+        data: { scoringModelId: null },
+      }),
+      this.prisma.persona.updateMany({
+        where: { voiceModelId: id },
+        data: { voiceModelId: null },
+      }),
+      this.prisma.llmModel.delete({ where: { id } }),
+    ]);
+    if (model.isDefault) await this.reconcileDefaults();
+    await this.invalidateModelCache();
+    return { id, deleted: true, kind: model.kind };
+  }
+
   /** Make this model the primary of ITS kind (chat and voice primaries coexist). */
   async promoteModel(id: number) {
-    const model = await this.assertModel(id);
+    const model = await this.prisma.llmModel.findUnique({
+      where: { id },
+      include: { provider: { select: { isEnabled: true } } },
+    });
+    if (!model) throw new NotFoundException('LlmModel', id);
+    // A primary on a disabled provider can't be resolved — refuse to promote it.
+    if (!model.provider.isEnabled) {
+      throw new ValidationException(
+        'Cannot set a model on a disabled provider as primary — enable the provider first',
+      );
+    }
     await this.prisma.$transaction([
       this.prisma.llmModel.updateMany({
         where: { kind: model.kind },

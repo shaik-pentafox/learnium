@@ -6,6 +6,7 @@ import {
   NotFoundException,
   ForbiddenException,
   ConflictException,
+  ValidationException,
 } from '../../core/errors/domain.errors';
 import { renderSystemPrompt } from '../../core/llm/persona-prompt.template';
 import type { CreatePersonaDto, UpdatePersonaDto, PersonaQueryDto } from './dto/persona.dto';
@@ -43,6 +44,46 @@ export class PersonasService {
       return languages.filter((l) => resolved.languages.includes(l));
     } catch {
       return languages;
+    }
+  }
+
+  /** Reject an invalid voice binding AT WRITE TIME. A pinned `voiceModelId` must
+   *  be a voice-kind model, and a chosen `voiceId` must exist in that model's
+   *  catalog — `voiceFactory.resolve()` silently falls back to the primary for a
+   *  bad pin, so it can't be used to validate; we query the pinned row directly.
+   *  A null pin uses the primary voice model; we validate `voiceId` against it
+   *  when one resolves, but never block writes while no voice model is configured. */
+  private async validateVoiceBinding(
+    voiceModelId: number | null,
+    voiceId: string | null,
+  ): Promise<void> {
+    if (voiceModelId != null) {
+      const model = await this.prisma.llmModel.findUnique({
+        where: { id: voiceModelId },
+        include: { masterModel: { select: { voices: true } } },
+      });
+      if (!model || model.kind !== 'voice') {
+        throw new ValidationException('voiceModelId must reference a voice model');
+      }
+      if (voiceId != null && !(model.masterModel?.voices ?? []).includes(voiceId)) {
+        throw new ValidationException(
+          `Voice '${voiceId}' is not in the selected voice model's catalog`,
+        );
+      }
+      return;
+    }
+    if (voiceId != null) {
+      try {
+        const resolved = await this.voiceFactory.resolve(null);
+        if (resolved.voices.length > 0 && !resolved.voices.includes(voiceId)) {
+          throw new ValidationException(
+            `Voice '${voiceId}' is not in the primary voice model's catalog`,
+          );
+        }
+      } catch (err) {
+        if (err instanceof ValidationException) throw err;
+        // No voice model configured yet — nothing to validate against; allow.
+      }
     }
   }
 
@@ -195,6 +236,10 @@ export class PersonasService {
       dto.languages !== undefined
         ? await this.filterLanguagesForVoiceModel(dto.voiceModelId ?? null, dto.languages)
         : undefined;
+    // Reject an invalid voice model / voiceId before persisting.
+    if (dto.voiceModelId !== undefined || dto.voiceId !== undefined) {
+      await this.validateVoiceBinding(dto.voiceModelId ?? null, dto.voiceId ?? null);
+    }
 
     return this.prisma.$transaction(async (tx) => {
       const persona = await tx.persona.create({
@@ -265,6 +310,12 @@ export class PersonasService {
         effectiveVoiceModelId,
         existing.languages,
       );
+    }
+    // Validate the (possibly just-changed) voice binding before persisting.
+    if ('voiceModelId' in personaData || 'voiceId' in personaData) {
+      const effectiveVoiceId =
+        'voiceId' in personaData ? (personaData.voiceId ?? null) : (existing.voiceId ?? null);
+      await this.validateVoiceBinding(effectiveVoiceModelId, effectiveVoiceId);
     }
     if ('conversationModelId' in personaData) data.conversationModelId = personaData.conversationModelId ?? null;
     if ('scoringModelId' in personaData) data.scoringModelId = personaData.scoringModelId ?? null;

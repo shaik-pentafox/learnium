@@ -34,6 +34,13 @@ export default defineConfig({
       '@': fileURLToPath(new URL('./src', import.meta.url)),
     },
   },
+  // Pre-bundle deps that are only reached through lazily-imported routes
+  // (e.g. react-colorful via the persona builder). Without this, Vite first
+  // discovers them mid-session and forces a re-optimize + 504 on the in-flight
+  // dynamic import.
+  optimizeDeps: {
+    include: ['react-colorful'],
+  },
   server: {
     port: 5173,
   },

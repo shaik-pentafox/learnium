@@ -35,8 +35,20 @@ interface ProviderFormSheetProps {
   onOpenChange: (open: boolean) => void
 }
 
+// The provider Select uses this sentinel to open the custom (no-master) path.
+const CUSTOM = 'custom'
+
+const ADAPTER_OPTIONS = [
+  { value: 'openai', label: 'OpenAI-compatible (vLLM, Ollama, LiteLLM, …)' },
+  { value: 'gemini', label: 'Google Gemini' },
+  { value: 'anthropic', label: 'Anthropic' },
+  { value: 'custom', label: 'Custom (OpenAI-compatible)' },
+] as const
+
 interface FormState {
+  /** A master id (as string), or the CUSTOM sentinel for a custom provider. */
   masterProviderId: string
+  adapterType: string
   name: string
   baseUrl: string
   apiKey: string
@@ -47,6 +59,7 @@ interface FormState {
 function initialState(provider: LlmProvider | null): FormState {
   return {
     masterProviderId: provider?.masterProviderId != null ? String(provider.masterProviderId) : '',
+    adapterType: '',
     name: provider?.name ?? '',
     baseUrl: provider?.baseUrl ?? '',
     apiKey: '', // write-only — never prefilled, even on edit
@@ -81,24 +94,31 @@ export function ProviderFormSheet({
     setWasOpen(false)
   }
 
+  const isCustom = !isEdit && form.masterProviderId === CUSTOM
+
   const mutation = useMutation({
-    mutationFn: () =>
-      isEdit
-        ? updateProvider(provider.id, {
-            name: form.name,
-            baseUrl: form.baseUrl,
-            apiKey: form.apiKey,
-            isEnabled: form.isEnabled,
-            monthlyBudgetUsd: form.monthlyBudgetUsd ? Number(form.monthlyBudgetUsd) : null,
-          })
-        : createProvider({
-            masterProviderId: Number(form.masterProviderId),
-            apiKey: form.apiKey,
-            name: form.name,
-            baseUrl: form.baseUrl,
-            isEnabled: form.isEnabled,
-            monthlyBudgetUsd: form.monthlyBudgetUsd ? Number(form.monthlyBudgetUsd) : null,
-          }),
+    mutationFn: () => {
+      const budget = form.monthlyBudgetUsd ? Number(form.monthlyBudgetUsd) : null
+      if (isEdit) {
+        return updateProvider(provider.id, {
+          name: form.name,
+          baseUrl: form.baseUrl,
+          apiKey: form.apiKey,
+          isEnabled: form.isEnabled,
+          monthlyBudgetUsd: budget,
+        })
+      }
+      return createProvider({
+        ...(isCustom
+          ? { adapterType: form.adapterType as 'openai' | 'gemini' | 'anthropic' | 'custom' }
+          : { masterProviderId: Number(form.masterProviderId) }),
+        apiKey: form.apiKey,
+        name: form.name,
+        baseUrl: form.baseUrl,
+        isEnabled: form.isEnabled,
+        monthlyBudgetUsd: budget,
+      })
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: llmKeys.providers() })
       queryClient.invalidateQueries({ queryKey: llmKeys.models() })
@@ -117,9 +137,13 @@ export function ProviderFormSheet({
     (m) => String(m.id) === form.masterProviderId,
   )
 
+  const createBlocked =
+    !isEdit &&
+    (!form.masterProviderId || (isCustom && (!form.adapterType || !form.name.trim())))
+
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
-    if (!isEdit && !form.masterProviderId) return
+    if (createBlocked) return
     mutation.mutate()
   }
 
@@ -168,6 +192,32 @@ export function ProviderFormSheet({
                       </span>
                     </SelectItem>
                   ))}
+                  <SelectItem value={CUSTOM}>
+                    <span>Custom provider…</span>
+                    <span className="ml-2 text-xs text-muted-foreground">
+                      not in the catalog
+                    </span>
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+            </Field>
+          )}
+
+          {isCustom && (
+            <Field label="Adapter" hint="How the runtime talks to this provider's API.">
+              <Select
+                value={form.adapterType}
+                onValueChange={(v) => set('adapterType', v)}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select an adapter" />
+                </SelectTrigger>
+                <SelectContent>
+                  {ADAPTER_OPTIONS.map((a) => (
+                    <SelectItem key={a.value} value={a.value}>
+                      {a.label}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </Field>
@@ -175,13 +225,17 @@ export function ProviderFormSheet({
 
           <Field
             label="Display name"
-            hint={isEdit ? undefined : 'Optional — defaults to the catalog name.'}
+            hint={
+              isEdit || isCustom
+                ? undefined
+                : 'Optional — defaults to the catalog name.'
+            }
           >
             <Input
               value={form.name}
               onChange={(e) => set('name', e.target.value)}
               placeholder={selectedMaster?.name ?? 'OpenAI'}
-              required={isEdit}
+              required={isEdit || isCustom}
             />
           </Field>
 
@@ -243,10 +297,7 @@ export function ProviderFormSheet({
             >
               Cancel
             </Button>
-            <Button
-              type="submit"
-              disabled={mutation.isPending || (!isEdit && !form.masterProviderId)}
-            >
+            <Button type="submit" disabled={mutation.isPending || createBlocked}>
               {mutation.isPending
                 ? 'Saving…'
                 : isEdit

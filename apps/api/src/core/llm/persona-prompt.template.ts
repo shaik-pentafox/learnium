@@ -50,7 +50,11 @@ export const PersonaTemplateSchema = z.object({
   productContext: z.string().max(2000).optional(),
   /** The single issue that triggered the contact (one issue per roleplay). */
   issue: z.string().min(1).max(2000),
-  channel: z.enum(CHANNELS).default('chat'),
+  /** Modalities the persona may be trained/tested in. Multi-select — a persona
+   *  can support text chat, a voice call, or both. */
+  channels: z.array(z.enum(CHANNELS)).min(1).optional(),
+  /** @deprecated legacy single-channel field; folded into `channels` on parse. */
+  channel: z.enum(CHANNELS).optional(),
 
   // ── Emotion ──
   emotion: z.enum(EMOTIONS),
@@ -73,6 +77,11 @@ export const PersonaTemplateSchema = z.object({
   /** Optional fixed opener. When set, the customer opens with essentially this
    *  line; otherwise the model improvises an opener from the scenario. */
   openingMessage: z.string().max(2000).optional(),
+}).transform((t) => {
+  // Fold the legacy `channel` into `channels`; default to text chat.
+  const { channel, channels, ...rest } = t;
+  const resolved = channels ?? (channel ? [channel] : (['chat'] as const));
+  return { ...rest, channels: [...resolved] as (typeof CHANNELS)[number][] };
 });
 
 export type PersonaTemplate = z.infer<typeof PersonaTemplateSchema>;
@@ -88,11 +97,23 @@ export const END_SENTINEL = '[CONVERSATION_ENDED]';
  *  as a start signal, not visible text. */
 export const BEGIN_CUE = '[BEGIN]';
 
-const CHANNEL_STYLE: Record<(typeof CHANNELS)[number], string> = {
+/**
+ * Channel-style directive. NOT baked into the persona's stored system prompt —
+ * a persona may support both modalities, and the two styles contradict each
+ * other. The realtime gateway injects the line for the *actual* session
+ * modality (chat vs voice) instead. See chat.gateway.ts.
+ */
+export const CHANNEL_STYLE: Record<(typeof CHANNELS)[number], string> = {
   chat: 'This is a live text chat: keep replies short, usually 1 to 3 sentences. You may paste short details like an order ID or error code.',
   audio:
     'This is a spoken phone call: talk conversationally, the way people speak out loud. Natural fillers and slightly longer turns are fine. Do not paste codes or write lists.',
 };
+
+/** Formatted channel-style block the gateway appends to the base prompt at
+ *  session start, chosen by the live modality. */
+export function channelStyleBlock(channel: (typeof CHANNELS)[number]): string {
+  return `\n\n# This channel\n${CHANNEL_STYLE[channel]}`;
+}
 
 const GENDER_DESCRIPTION: Record<(typeof GENDERS)[number], string> = {
   male: 'a man',
@@ -214,7 +235,6 @@ const behaviourBlock: PromptBlock = (t) =>
     '# How you behave',
     t.behaviorNotes ?? null,
     '- Behave like a real person, not a checklist. Answer only what is asked.',
-    `- ${CHANNEL_STYLE[t.channel]}`,
     '- Do NOT solve your own problem or suggest the solution; that is the agent’s job.',
     '- React to what the agent actually says; do not follow a fixed script.',
   ]);

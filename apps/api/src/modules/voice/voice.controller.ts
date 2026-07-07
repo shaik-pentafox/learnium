@@ -4,6 +4,7 @@ import { PrismaService } from '../../core/database/prisma.service';
 import { ValidationException } from '../../core/errors/domain.errors';
 import { VoiceModelFactory } from '../../core/voice/voice-model-factory.service';
 import { VoicePreviewService } from '../../core/voice/voice-preview.service';
+import { VOICE_GENDERS } from '../../core/voice/voice-genders';
 
 /**
  * Read-only catalog the persona builder uses for its voice section. Registry-
@@ -33,6 +34,7 @@ export class VoiceController {
           name: v,
           voiceId: v,
           provider: resolved.providerType,
+          gender: VOICE_GENDERS[v] ?? null,
         })),
       };
     } catch {
@@ -41,7 +43,9 @@ export class VoiceController {
         orderBy: { name: 'asc' },
         select: { id: true, name: true, voiceId: true, provider: true },
       });
-      return { voices: rows };
+      return {
+        voices: rows.map((r) => ({ ...r, gender: VOICE_GENDERS[r.voiceId] ?? null })),
+      };
     }
   }
 

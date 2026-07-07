@@ -1,4 +1,4 @@
-import { apiGet, apiPost, apiPatch } from '@/lib/api-client'
+import { apiGet, apiPost, apiPatch, apiDelete } from '@/lib/api-client'
 import { queryKeys } from '@/lib/query-keys'
 
 export type ModelKind = 'chat' | 'voice'
@@ -78,7 +78,10 @@ export async function listMasterModels(
 
 /** Create input: pick a master, supply the key. Name/baseUrl default from master. */
 export interface CreateProviderInput {
-  masterProviderId: number
+  /** Master-catalog path: pick a seeded provider. */
+  masterProviderId?: number
+  /** Custom path (no master): declare the adapter + name yourself. */
+  adapterType?: 'openai' | 'gemini' | 'anthropic' | 'custom'
   apiKey: string
   name?: string
   baseUrl?: string
@@ -105,10 +108,11 @@ export async function createProvider(
   input: CreateProviderInput,
 ): Promise<LlmProvider> {
   const payload: Record<string, unknown> = {
-    masterProviderId: input.masterProviderId,
     apiKey: input.apiKey.trim(),
     isEnabled: input.isEnabled,
   }
+  if (input.masterProviderId != null) payload['masterProviderId'] = input.masterProviderId
+  else if (input.adapterType) payload['adapterType'] = input.adapterType
   const name = input.name?.trim()
   if (name) payload['name'] = name
   const baseUrl = input.baseUrl?.trim()
@@ -150,13 +154,39 @@ export async function listModels(kind?: ModelKind): Promise<LlmModel[]> {
   })
 }
 
-/** POST /llm/models — register a model by picking from the master catalog. */
+/** POST /llm/models — register a model from the master catalog (masterModelId),
+ *  or a custom model (name + kind, chat only). */
 export async function createModel(input: {
   providerId: number
-  masterModelId: number
+  masterModelId?: number
+  name?: string
+  kind?: ModelKind
+  capabilities?: string[]
+  contextWindowTokens?: number
+  inputPricePerMillion?: number
+  outputPricePerMillion?: number
   isDefault?: boolean
 }): Promise<LlmModel> {
   return apiPost<LlmModel>('/llm/models', input)
+}
+
+/** DELETE /llm/models/:id — remove a model. Persona refs to it fall back to the
+ *  primary; a removed primary is auto-replaced server-side. */
+export async function deleteModel(
+  id: number,
+): Promise<{ id: number; deleted: boolean; kind: ModelKind }> {
+  return apiDelete<{ id: number; deleted: boolean; kind: ModelKind }>(
+    `/llm/models/${id}`,
+  )
+}
+
+/** POST /llm/providers/:id/test — live key/connectivity probe (no token spend). */
+export async function testProvider(
+  id: number,
+): Promise<{ ok: boolean; status?: number; message: string }> {
+  return apiPost<{ ok: boolean; status?: number; message: string }>(
+    `/llm/providers/${id}/test`,
+  )
 }
 
 /** POST /llm/models/:id/promote — make this the primary of ITS kind. */

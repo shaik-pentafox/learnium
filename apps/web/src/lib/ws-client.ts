@@ -11,8 +11,8 @@ const RoleplayServerSchema = z.discriminatedUnion('type', [
     sessionId: z.string(),
     personaName: z.string(),
     personaColor: z.string().nullable().optional(),
-    systemPrompt: z.string(),
     hasStarted: z.boolean().optional(),
+    // systemPrompt is intentionally NOT sent by the server — internal artifact.
     /** BCP-47 codes the persona allows for voice sessions. Empty = voice disabled. */
     personaLanguages: z.array(z.string()).optional(),
   }),

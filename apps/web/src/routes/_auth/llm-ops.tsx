@@ -1,10 +1,12 @@
 import { useState } from 'react'
 import { createFileRoute, redirect } from '@tanstack/react-router'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useMutation } from '@tanstack/react-query'
 import { Plus, Cpu, Pencil, Plug, BarChart3 } from 'lucide-react'
-import { listProviders, llmKeys, type LlmProvider } from '@/services/llm'
+import { listProviders, testProvider, llmKeys, type LlmProvider } from '@/services/llm'
 import { useAuthStore } from '@/stores/auth'
+import { notify } from '@/lib/toast'
 import { Button } from '@/components/ui/button'
+import { ErrorState } from '@/components/ui/error-state'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { ProviderFormSheet } from '@/components/llm-ops/provider-form-sheet'
 import { ModelsSection } from '@/components/settings/models-section'
@@ -115,6 +117,12 @@ function ProviderCard({
   provider: LlmProvider
   onEdit: () => void
 }) {
+  // Live key/connectivity probe — surfaces a bad key here, not at first chat.
+  const test = useMutation({
+    mutationFn: () => testProvider(provider.id),
+    onSuccess: (r) => (r.ok ? notify.success(r.message) : notify.error(r.message)),
+    onError: (err) => notify.error(err),
+  })
   return (
     <div className="group rounded-lg border border-border bg-surface p-4">
       <div className="flex items-start justify-between">
@@ -135,6 +143,17 @@ function ProviderCard({
             variant="ghost"
             size="icon"
             className="size-7 opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
+            onClick={() => test.mutate()}
+            disabled={test.isPending}
+            aria-label={`Test ${provider.name} connection`}
+            title="Test connection"
+          >
+            <Plug className="size-3.5" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="size-7 opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
             onClick={onEdit}
             aria-label={`Edit ${provider.name}`}
           >
@@ -148,7 +167,7 @@ function ProviderCard({
           <dd className="font-data">{provider.credentialHint ?? '—'}</dd>
         </div>
         <div>
-          <dt className="text-xs text-muted-foreground">Budget (MTD)</dt>
+          <dt className="text-xs text-muted-foreground">Monthly budget</dt>
           <dd className="font-data tabular-nums">
             {provider.monthlyBudgetUsd != null
               ? `$${provider.monthlyBudgetUsd.toLocaleString()}`
@@ -188,18 +207,7 @@ function CardSkeleton({ count }: { count: number }) {
 }
 
 function ErrorRow({ onRetry }: { onRetry: () => void }) {
-  return (
-    <div className="rounded-lg border border-border bg-surface p-4 text-sm">
-      <p className="text-destructive">Couldn’t load providers.</p>
-      <button
-        type="button"
-        onClick={onRetry}
-        className="mt-2 text-primary hover:underline"
-      >
-        Retry
-      </button>
-    </div>
-  )
+  return <ErrorState title="Couldn’t load providers" onRetry={onRetry} />
 }
 
 function EmptyRow({ text }: { text: string }) {

@@ -78,9 +78,13 @@ flowchart TB
 | **PERSONA** | Trainer (via builder) | Per persona | **Yes — this is the domain** |
 | **RUNTIME** | Gateway at session start | Per session | Shared |
 
-> Today the gateway already injects the **language pin** (Layer 3) at
-> `voice_start` and the channel style is folded into a persona block. This design
-> makes both first-class Layer-3 blocks so voice/text render consistently.
+> **Implemented.** The channel style is a Layer-3 runtime injection, chosen by the
+> *actual* session modality — `channelStyleBlock('chat')` into the text graph
+> prompt, `channelStyleBlock('audio')` into the voice `instructions` at
+> `voice_start`. It is **not** baked into the stored `systemPrompt`, because a
+> persona may support **both** channels (`channels: ('chat'|'audio')[]`) and the
+> two styles contradict (chat: short, paste codes · voice: spoken, no lists).
+> The language pin is injected alongside it at `voice_start`.
 
 ---
 
@@ -168,7 +172,8 @@ Order matters for two reasons: **guardrails bracket the persona data**
 | `goal` | persona | `desiredOutcome` | ✅ |
 | `hidden` | persona | `hiddenDetails?` | ➖ |
 | `opening` | persona | `openingMessage?` (+ `BEGIN_CUE`) | ✅ |
-| `behaviour` | persona+runtime | `behaviorNotes?`, `channel` | ✅ |
+| `behaviour` | persona | `behaviorNotes?` | ✅ |
+| `channel-style` | runtime | live session modality (chat/audio) — injected by gateway, **not** baked | ✅ |
 | `language` | runtime | `runtime.languageCode?` | ➖ (voice only) |
 | `ending` | system+persona | `resolutionCriteria`, **`closingStatement?`**, `END_SENTINEL` | ✅ |
 | `extra` | persona | `additionalInstructions?` | ➖ |
@@ -222,24 +227,29 @@ Prisma column, so **no migration** and existing personas keep rendering.
 
 ```ts
 // persona-prompt.template.ts
-export const GENDERS = ['unspecified', 'male', 'female', 'nonbinary'] as const;
+export const GENDERS = ['male', 'female'] as const;
 
 // in PersonaTemplateSchema:
-gender: z.enum(GENDERS).default('unspecified'),
+gender: z.enum(GENDERS).optional(),   // omitted = unspecified
 ```
 
-Rendered inside the `identity` block:
+Rendered inside the `identity` block (only when set):
 
 ```
 # Who you are
 Your name is Dana. You are a woman. You are a premium subscriber for 3 years…
 ```
 
-**Interactions to decide (flagged for review):**
-- Should `gender` **suggest a default `voiceId`** in the builder (e.g. female →
-  a female voice from the model catalog)? Recommend: suggest, never force.
+**Gender → voice filtering (implemented):** the builder's voice picker lists only
+voices matching the persona's gender. Genders come from a static
+`VOICE_GENDERS` map (`core/voice/voice-genders.ts`) surfaced by `/voice/voices`;
+Gemini Live voices are documented, OpenAI Realtime gives official genders only for
+`marin`/`cedar` (the rest are perceived, `alloy` is neutral and unlisted). A voice
+with no gender, or an unset persona gender, shows for anyone (fail-open — filtering
+never hides the whole list). Changing gender drops a now-hidden voice pick.
+
 - Pronoun consistency: the block instructs the model to keep pronouns consistent
-  with `gender` when `gender != unspecified`.
+  with `gender` when it is set.
 
 ### 5.1 Adopted fields (from the reference architecture, §11)
 
@@ -288,7 +298,7 @@ steps map 1:1 to prompt layers/blocks, which keeps the mental model aligned.
 flowchart LR
     ST1["1 · Basics<br/>name · description · color"] -->
     ST2["2 · Customer<br/>name · gender · profile · company · product"] -->
-    ST3["3 · Scenario<br/>issue · channel · emotion · intensity"] -->
+    ST3["3 · Scenario<br/>issue · channels (multi) · emotion · intensity"] -->
     ST4["4 · Goal<br/>desired outcome · resolution criteria"] -->
     ST5["5 · Difficulty (optional)<br/>hidden · behaviour · opener · extra"] -->
     ST6["6 · Scoring<br/>criteria + weights"] -->

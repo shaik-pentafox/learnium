@@ -96,6 +96,12 @@ export class LlmOpsController {
     return this.llmOpsService.updateProvider(id, result.data);
   }
 
+  @Post('providers/:id/test')
+  @Permissions('llmops:write')
+  testProvider(@Param('id', ParseIntPipe) id: number) {
+    return this.llmOpsService.testProvider(id);
+  }
+
   @Delete('providers/:id')
   @Permissions('llmops:write')
   disableProvider(@Param('id', ParseIntPipe) id: number) {
@@ -132,5 +138,11 @@ export class LlmOpsController {
   @Permissions('llmops:write')
   promoteModel(@Param('id', ParseIntPipe) id: number) {
     return this.llmOpsService.promoteModel(id);
+  }
+
+  @Delete('models/:id')
+  @Permissions('llmops:write')
+  deleteModel(@Param('id', ParseIntPipe) id: number) {
+    return this.llmOpsService.deleteModel(id);
   }
 }
