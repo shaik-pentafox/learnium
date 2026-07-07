@@ -155,6 +155,17 @@ export class ModelFactoryService {
     return built;
   }
 
+  /** Concrete chat classes (ChatOpenAI/ChatAnthropic/ChatGoogleGenerativeAI)
+   *  each bundle their own `@langchain/core`. When a server install resolves more
+   *  than one core version, tsc rejects the assignment to our `BaseChatModel`
+   *  (protected-member identity mismatch, TS2375) even though they ARE valid chat
+   *  models. Funnel construction through this seam so the build is immune to that
+   *  duplicate-copy skew. The `overrides` pin in the root package.json is the
+   *  real dedupe; this keeps the build green regardless. */
+  private asChatModel(model: unknown): BaseChatModel {
+    return model as BaseChatModel;
+  }
+
   private construct(record: ModelRecord): BaseChatModel {
     const { provider } = record;
     const apiKey = provider.credentialRef
@@ -168,30 +179,36 @@ export class ModelFactoryService {
     const type = (provider.masterProvider?.adapterType ?? provider.type).toLowerCase();
 
     if (type === 'gemini') {
-      return new ChatGoogleGenerativeAI({
-        model: record.name,
-        streaming: true,
-        ...(apiKey ? { apiKey } : {}),
-      });
+      return this.asChatModel(
+        new ChatGoogleGenerativeAI({
+          model: record.name,
+          streaming: true,
+          ...(apiKey ? { apiKey } : {}),
+        }),
+      );
     }
 
     if (type === 'anthropic') {
-      return new ChatAnthropic({
-        model: record.name,
-        streaming: true,
-        ...(apiKey ? { apiKey } : {}),
-      });
+      return this.asChatModel(
+        new ChatAnthropic({
+          model: record.name,
+          streaming: true,
+          ...(apiKey ? { apiKey } : {}),
+        }),
+      );
     }
 
     // openai | openrouter | azure_openai | custom → OpenAI-compatible
     const baseURL =
       provider.baseUrl ?? (type === 'openrouter' ? OPENROUTER_BASE : undefined);
-    return new ChatOpenAI({
-      model: record.name,
-      // Local/self-hosted OpenAI-compatible servers (vLLM/Ollama) often need no key.
-      apiKey: apiKey ?? 'sk-noauth',
-      streaming: true,
-      ...(baseURL ? { configuration: { baseURL } } : {}),
-    });
+    return this.asChatModel(
+      new ChatOpenAI({
+        model: record.name,
+        // Local/self-hosted OpenAI-compatible servers (vLLM/Ollama) often need no key.
+        apiKey: apiKey ?? 'sk-noauth',
+        streaming: true,
+        ...(baseURL ? { configuration: { baseURL } } : {}),
+      }),
+    );
   }
 }
