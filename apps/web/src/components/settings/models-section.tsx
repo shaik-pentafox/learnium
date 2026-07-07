@@ -141,11 +141,6 @@ function ModelRow({ model, onPromote, promoting, onDelete }: ModelRowProps) {
     <tr className="border-b border-border last:border-0">
       <td className="px-6 py-3">
         <span className="font-data">{model.name}</span>
-        {model.isDefault && (
-          <span className="ml-2 rounded bg-success-soft px-1.5 py-0.5 text-xs font-medium text-success">
-            primary {model.kind}
-          </span>
-        )}
         {model.contextWindowTokens != null && (
           <span className="ml-2 text-xs text-muted-foreground">
             {(model.contextWindowTokens / 1000).toFixed(0)}k ctx
@@ -168,7 +163,11 @@ function ModelRow({ model, onPromote, promoting, onDelete }: ModelRowProps) {
       </td>
       <td className="px-6 py-3">
         <div className="flex items-center justify-end gap-1">
-          {!model.isDefault && (
+          {model.isDefault ? (
+            <span className="inline-flex h-7 items-center gap-1 rounded px-2 text-xs font-medium text-success">
+              Primary {model.kind}
+            </span>
+          ) : (
             <Button
               variant="ghost"
               size="sm"
