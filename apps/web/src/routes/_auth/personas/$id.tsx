@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { PersonaBuilder } from '@/components/personas/persona-builder'
 import { getPersona, personaKeys } from '@/services/personas'
 import { useAuthStore } from '@/stores/auth'
+import { ErrorState } from '@/components/ui/error-state'
 
 export const Route = createFileRoute('/_auth/personas/$id')({
   beforeLoad: () => {
@@ -28,17 +29,10 @@ function EditPersonaPage() {
 
   if (isError || !data) {
     return (
-      <div className="mx-auto max-w-md rounded-lg border border-border bg-surface p-6 text-center text-sm">
-        <p className="text-destructive">Couldn’t load this persona.</p>
-        <div className="mt-3 flex justify-center gap-3">
-          <button
-            type="button"
-            onClick={() => refetch()}
-            className="text-primary hover:underline"
-          >
-            Retry
-          </button>
-          <Link to="/personas" className="text-muted-foreground hover:underline">
+      <div className="mx-auto max-w-md">
+        <ErrorState title="Couldn’t load this persona" onRetry={() => refetch()} />
+        <div className="mt-3 text-center">
+          <Link to="/personas" className="text-sm text-muted-foreground hover:underline">
             Back to personas
           </Link>
         </div>

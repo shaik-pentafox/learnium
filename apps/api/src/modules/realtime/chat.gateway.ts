@@ -18,6 +18,7 @@ import { buildRoleplayGraph } from '../../core/llm/roleplay-graph';
 import {
   PersonaTemplateSchema,
   renderSystemPrompt,
+  channelStyleBlock,
   BEGIN_CUE,
 } from '../../core/llm/persona-prompt.template';
 import { ScoringService } from '../../core/llm/scoring.service';
@@ -95,10 +96,12 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
     // Render the live system prompt from the structured template each session, so
     // master-template improvements reach every persona (cache is the fallback).
+    // Style-less base — the channel directive is injected per session modality
+    // (a persona may support both, and the chat/voice styles contradict).
     const baseSystemPrompt = this.resolveSystemPrompt(session.persona);
-    // Mutable holder: voice_start swaps `.active` to inject language instruction;
-    // voice_stop restores it. The graph closure captures the holder, not the string.
-    const systemPromptHolder = { active: baseSystemPrompt };
+    // The app graph only runs text sessions, so it always gets the chat style.
+    // Mutable holder so voice_start can swap `.active` if it ever routes the graph.
+    const systemPromptHolder = { active: baseSystemPrompt + channelStyleBlock('chat') };
 
     const sessionSpan = this.flowLog.start('roleplay_session', {
       sessionUid,
@@ -178,6 +181,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     wsClient.personaVoiceModelId = session.persona.voiceModelId;
     wsClient.systemPromptHolder = systemPromptHolder;
     wsClient.baseSystemPrompt = baseSystemPrompt;
+    wsClient.isSimulation = session.isSimulation;
 
     // Voice availability: persona.languages ∩ the resolved voice model's languages.
     // No usable voice model (none configured / provider disabled) → voice off.
@@ -200,12 +204,13 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       where: { sessionId: session.id },
     });
 
+    // NOTE: never send the rendered system prompt to the client — it is internal
+    // and must not leak to a trainee/trainer over the socket.
     this.send(client, {
       type: 'joined',
       sessionId: session.uid,
       personaName: session.persona.name,
       personaColor: session.persona.color ?? null,
-      systemPrompt: baseSystemPrompt,
       hasStarted: messageCount > 0,
       personaLanguages,
     });
@@ -458,6 +463,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       inputTokens: providerUsage?.inputTokens ?? this.usage.estimateTokens(content),
       outputTokens: providerUsage?.outputTokens ?? this.usage.estimateTokens(fullContent),
       estimated: providerUsage === null,
+      isSimulation: wsClient.isSimulation ?? false,
       latencyMs: Date.now() - startedAt,
     });
 
@@ -584,6 +590,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     // directly and never touch the app graph.
     const instructions =
       (wsClient.baseSystemPrompt ?? '') +
+      channelStyleBlock('audio') +
       this.languageInstruction(languageCode) +
       this.voiceRoleLock(wsClient.personaName);
     // stt+tts runs through the graph — swap the live prompt for language pinning.
@@ -681,6 +688,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
           inputTokens,
           outputTokens,
           estimated: false,
+          isSimulation: wsClient.isSimulation ?? false,
           latencyMs,
         });
       },
@@ -696,6 +704,13 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     if (wsClient?.voiceTurn) {
       await wsClient.voiceTurn.destroy();
       delete wsClient.voiceTurn;
+    }
+    // Reflect the modality revert: the session is back to text. Leaving isVoice
+    // true would misreport a reverted session as voice in queries/analytics.
+    if (wsClient?.sessionUid) {
+      await this.prisma.session
+        .update({ where: { uid: wsClient.sessionUid }, data: { isVoice: false } })
+        .catch(() => {}); // session may already be gone; best-effort
     }
     this.send(client, { type: 'voice_stopped' });
   }

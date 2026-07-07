@@ -32,6 +32,11 @@ const ScoringSchema = z.object({
 
 type LlmScoringResponse = z.infer<typeof ScoringSchema>;
 
+const NO_ENGAGEMENT_CRITERION_FEEDBACK =
+  'No score — the trainee sent no messages, so there is nothing to evaluate.';
+const NO_ENGAGEMENT_OVERALL_FEEDBACK =
+  'The trainee ended the session without responding at all. A roleplay cannot be scored on the persona’s opening line alone, so every criterion is 0. Engage with the customer to earn a score.';
+
 @Injectable()
 export class ScoringService {
   private readonly logger = new Logger(ScoringService.name);
@@ -67,6 +72,29 @@ export class ScoringService {
       return { scores: [], feedback: null };
     }
 
+    // Zero-engagement guard: the trainee's turns are the `user` messages;
+    // `assistant` lines are the persona speaking. A session the trainee never
+    // spoke in cannot earn marks — skip the LLM entirely, since it would
+    // otherwise hand out credit for the persona's opening line. Deterministic 0.
+    const traineeTurns = session.messages.filter((m) => m.role === 'user');
+    if (traineeTurns.length === 0) {
+      this.flowLog.step('scoring', 'zero_engagement', {
+        sessionId,
+        sessionUid: session.uid,
+        messageCount: session.messages.length,
+        criteriaCount: criteria.length,
+      });
+      const zeroRows: ScoreRow[] = criteria.map((c) => ({
+        criterionId: c.id,
+        name: c.name,
+        score: 0,
+        maxScore: c.maxScore,
+        feedback: NO_ENGAGEMENT_CRITERION_FEEDBACK,
+      }));
+      await this.persist(sessionId, zeroRows, NO_ENGAGEMENT_OVERALL_FEEDBACK);
+      return { scores: zeroRows, feedback: NO_ENGAGEMENT_OVERALL_FEEDBACK };
+    }
+
     const transcript = session.messages
       .map((m) => `${m.role.toUpperCase()}: ${m.content}`)
       .join('\n');
@@ -89,28 +117,41 @@ export class ScoringService {
       )
       .join('\n');
 
-    const prompt = `You are a training evaluator. Score the trainee based on the chat transcript and rubric.
+    const prompt = `You are a strict training evaluator. Score ONLY the trainee's demonstrated performance from the transcript, using the rubric. The trainee's turns are the "USER" lines; "ASSISTANT" lines are the roleplay persona and must NEVER earn the trainee any credit.
+
+Rules:
+- Score each criterion on evidence the trainee actually demonstrated. No evidence for a criterion = the lowest score (0). Do not give the benefit of the doubt.
+- Do NOT reward greetings-only replies, one-word answers, silence, or off-task/filler messages.
+- More messages is not automatically better — judge quality against each criterion, not turn count.
+- The trainee sent ${traineeTurns.length} message(s) in this session.
 
 TRANSCRIPT:
-${transcript || '(no messages recorded)'}
+${transcript}
 
 SCORING RUBRIC:
 ${criteriaText}
 
-Return one score object per rubric criterion (use the exact criterionId shown), each with a 0-to-max integer score and a one-sentence feedback, plus a 2-3 sentence overall feedback.`;
+Return one score object per rubric criterion (use the exact criterionId shown), each with a 0-to-max integer score and a one-sentence feedback grounded in what the trainee did (or failed to do), plus a 2-3 sentence overall feedback.`;
 
     const llmResult = await this.runScoring(
       session.persona.scoringModelId,
       prompt,
       sessionId,
+      session.isSimulation,
     );
 
     const scoreRows: ScoreRow[] = criteria.map((c) => {
       const match = llmResult?.scores.find((s) => s.criterionId === c.id);
+      // Clamp to the rubric range — the LLM can return out-of-bounds or
+      // fractional values, and a score above maxScore would inflate the total.
+      const score =
+        match?.score == null
+          ? null
+          : Math.max(0, Math.min(c.maxScore, Math.round(match.score)));
       return {
         criterionId: c.id,
         name: c.name,
-        score: match?.score ?? null,
+        score,
         maxScore: c.maxScore,
         feedback:
           match?.feedback ??
@@ -118,16 +159,7 @@ Return one score object per rubric criterion (use the exact criterionId shown), 
       };
     });
 
-    await this.prisma.$transaction([
-      // `name` is display-only — ScoreResult has no name column, so strip it here.
-      this.prisma.scoreResult.createMany({
-        data: scoreRows.map(({ name: _name, ...r }) => ({ ...r, sessionId })),
-      }),
-      this.prisma.session.update({
-        where: { id: sessionId },
-        data: { feedback: llmResult?.overallFeedback ?? null },
-      }),
-    ]);
+    await this.persist(sessionId, scoreRows, llmResult?.overallFeedback ?? null);
 
     span.complete({
       scoredCriteria: scoreRows.filter((r) => r.score !== null).length,
@@ -139,6 +171,24 @@ Return one score object per rubric criterion (use the exact criterionId shown), 
     return { scores: scoreRows, feedback: llmResult?.overallFeedback ?? null };
   }
 
+  /** Persist score rows + overall feedback in one transaction. */
+  private async persist(
+    sessionId: number,
+    rows: ScoreRow[],
+    overallFeedback: string | null,
+  ): Promise<void> {
+    await this.prisma.$transaction([
+      // `name` is display-only — ScoreResult has no name column, so strip it here.
+      this.prisma.scoreResult.createMany({
+        data: rows.map(({ name: _name, ...r }) => ({ ...r, sessionId })),
+      }),
+      this.prisma.session.update({
+        where: { id: sessionId },
+        data: { feedback: overallFeedback },
+      }),
+    ]);
+  }
+
   /**
    * Prefer provider-native structured output; fall back to fenced-JSON parsing so
    * scoring still works on OpenAI-compatible endpoints that lack tool/JSON-schema
@@ -148,6 +198,7 @@ Return one score object per rubric criterion (use the exact criterionId shown), 
     scoringModelId: number | null,
     prompt: string,
     sessionId: number,
+    isSimulation: boolean,
   ): Promise<LlmScoringResponse | null> {
     let resolved;
     try {
@@ -180,6 +231,7 @@ Return one score object per rubric criterion (use the exact criterionId shown), 
         inputTokens: this.usage.estimateTokens(prompt),
         outputTokens: this.usage.estimateTokens(outputText),
         estimated: true,
+        isSimulation,
         latencyMs: Date.now() - startedAt,
       });
     };

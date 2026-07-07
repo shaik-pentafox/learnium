@@ -27,7 +27,7 @@ const tpl: PersonaTemplate = {
   customerProfile: 'Premium subscriber',
   company: 'Nimbus',
   issue: 'double charge',
-  channel: 'chat',
+  channels: ['chat'],
   emotion: 'frustrated',
   intensity: 4,
   desiredOutcome: 'refund',
@@ -95,12 +95,12 @@ describe('buildPersonaPayload', () => {
     expect(payload.template.hiddenDetails).toBe('switched plans')
   })
 
-  it('preserves channel, emotion and intensity', () => {
+  it('preserves channels, emotion and intensity', () => {
     const payload = buildPersonaPayload({
       ...base,
-      template: { ...tpl, channel: 'audio', emotion: 'angry', intensity: 5 },
+      template: { ...tpl, channels: ['chat', 'audio'], emotion: 'angry', intensity: 5 },
     })
-    expect(payload.template.channel).toBe('audio')
+    expect(payload.template.channels).toEqual(['chat', 'audio'])
     expect(payload.template.emotion).toBe('angry')
     expect(payload.template.intensity).toBe(5)
   })

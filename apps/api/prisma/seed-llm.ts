@@ -249,6 +249,50 @@ async function main() {
     modelIdByKey.set(`${m.providerKey}/${m.key}`, row.id);
   }
 
+  // 1.5 Prune master rows no longer in the canonical catalog (e.g. a provider we
+  //     dropped, like Sarvam). Upsert alone can only add/update — it never
+  //     removes, so retired entries would linger forever. Skip — and warn about —
+  //     any master still referenced by a configured row, so we never orphan an
+  //     admin's BYOK setup. Models first (FK), then now-empty providers.
+  const validModelKeys = new Set(MASTER_MODELS.map((m) => `${m.providerKey}/${m.key}`));
+  const validProviderKeys = new Set(MASTER_PROVIDERS.map((p) => p.key));
+
+  let prunedModels = 0;
+  const existingModels = await prisma.masterModel.findMany({
+    include: {
+      masterProvider: { select: { key: true } },
+      _count: { select: { configured: true } },
+    },
+  });
+  for (const mm of existingModels) {
+    const canonical = `${mm.masterProvider.key}/${mm.key}`;
+    if (validModelKeys.has(canonical)) continue;
+    if (mm._count.configured > 0) {
+      console.warn(
+        `⚠ Keeping stale master model ${canonical} — ${mm._count.configured} configured model(s) still reference it.`,
+      );
+      continue;
+    }
+    await prisma.masterModel.delete({ where: { id: mm.id } });
+    prunedModels++;
+  }
+
+  let prunedProviders = 0;
+  const existingProviders = await prisma.masterProvider.findMany({
+    include: { _count: { select: { models: true, configured: true } } },
+  });
+  for (const mp of existingProviders) {
+    if (validProviderKeys.has(mp.key)) continue;
+    if (mp._count.models > 0 || mp._count.configured > 0) {
+      console.warn(
+        `⚠ Keeping stale master provider '${mp.key}' — ${mp._count.models} model(s) / ${mp._count.configured} configured provider(s) still reference it.`,
+      );
+      continue;
+    }
+    await prisma.masterProvider.delete({ where: { id: mp.id } });
+    prunedProviders++;
+  }
+
   // 2. Backfill: link legacy configured rows to their masters (best-effort).
   let linkedProviders = 0;
   let linkedModels = 0;
@@ -276,12 +320,41 @@ async function main() {
     }
   }
 
+  // 3. Refresh IO pricing + context window on configured models from their
+  //    linked master, so a catalog price change propagates on reseed instead of
+  //    leaving configured rows (and cost telemetry) on stale numbers.
+  let refreshedModels = 0;
+  const configuredWithMaster = await prisma.llmModel.findMany({
+    where: { masterModelId: { not: null } },
+    include: { masterModel: true },
+  });
+  for (const lm of configuredWithMaster) {
+    const mm = lm.masterModel;
+    if (!mm) continue;
+    const drifted =
+      lm.inputPricePerMillion !== mm.inputPricePerMillion ||
+      lm.outputPricePerMillion !== mm.outputPricePerMillion ||
+      lm.contextWindowTokens !== mm.contextWindowTokens;
+    if (!drifted) continue;
+    await prisma.llmModel.update({
+      where: { id: lm.id },
+      data: {
+        inputPricePerMillion: mm.inputPricePerMillion,
+        outputPricePerMillion: mm.outputPricePerMillion,
+        contextWindowTokens: mm.contextWindowTokens,
+      },
+    });
+    refreshedModels++;
+  }
+
   const chatCount = MASTER_MODELS.filter((m) => m.kind === 'chat').length;
   const voiceCount = MASTER_MODELS.filter((m) => m.kind === 'voice').length;
   console.log('Master catalog seeded:');
   console.log(`  Providers    : ${MASTER_PROVIDERS.map((p) => p.name).join(', ')}`);
   console.log(`  Chat models  : ${chatCount}, Voice models: ${voiceCount}`);
+  console.log(`  Pruned       : ${prunedModels} stale model(s), ${prunedProviders} stale provider(s)`);
   console.log(`  Backfilled   : ${linkedProviders} provider(s), ${linkedModels} model(s) linked to masters`);
+  console.log(`  IO refreshed : ${refreshedModels} configured model(s) synced to master pricing`);
 }
 
 main()

@@ -9,6 +9,7 @@ import {
 } from '@/services/account'
 import { notify } from '@/lib/toast'
 import { Button } from '@/components/ui/button'
+import { ErrorState } from '@/components/ui/error-state'
 import { Input } from '@/components/ui/input'
 import { PasswordInput } from '@/components/ui/password-input'
 import { SettingsSection } from '@/components/settings/settings-section'
@@ -29,15 +30,8 @@ export function AccountSection() {
           <div className="h-32 animate-pulse rounded-lg bg-muted" />
         </div>
       ) : me.isError ? (
-        <div className="p-6 text-sm">
-          <p className="text-destructive">Couldn’t load your account.</p>
-          <button
-            type="button"
-            onClick={() => me.refetch()}
-            className="mt-2 text-primary hover:underline"
-          >
-            Retry
-          </button>
+        <div className="p-6">
+          <ErrorState title="Couldn’t load your account" onRetry={() => me.refetch()} />
         </div>
       ) : (
         <div className="divide-y divide-border">

@@ -113,6 +113,7 @@ interface MockPersona {
   conversationModelId?: number | null
   scoringModelId?: number | null
   isPublished?: boolean
+  languages?: string[]
   scoreCriteria: {
     id: number
     name: string
@@ -137,11 +138,20 @@ const SEED_TEMPLATE: PersonaTemplate = {
   customerProfile: 'Premium subscriber for 3 years',
   company: 'Nimbus Telecom',
   issue: 'charged twice for this month bill',
-  channel: 'chat',
+  channels: ['chat'],
   emotion: 'frustrated',
   intensity: 4,
   desiredOutcome: 'a refund of the duplicate charge',
   resolutionCriteria: 'the agent confirms the duplicate charge will be refunded',
+}
+
+const VOICE_TEMPLATE: PersonaTemplate = {
+  ...SEED_TEMPLATE,
+  customerName: 'Raj',
+  channels: ['chat', 'audio'],
+  issue: 'internet keeps dropping every evening',
+  desiredOutcome: 'a technician visit or a working connection',
+  resolutionCriteria: 'the agent books a technician or fixes the line',
 }
 
 let MOCK_PERSONAS: MockPersona[] = [
@@ -155,9 +165,21 @@ let MOCK_PERSONAS: MockPersona[] = [
       { id: 2, name: 'Resolution', maxScore: 20, weight: 2, order: 1 },
     ],
   },
+  {
+    id: 2, name: 'Voice: Dropping-line Raj',
+    description: 'A voice-call persona — internet keeps dropping. Tests voice mode.',
+    templateData: VOICE_TEMPLATE,
+    systemPrompt: renderMockPrompt(VOICE_TEMPLATE),
+    isPublished: true,
+    languages: ['en-IN', 'hi-IN'],
+    scoreCriteria: [
+      { id: 3, name: 'Empathy', maxScore: 10, weight: 2, order: 0 },
+      { id: 4, name: 'Resolution', maxScore: 20, weight: 2, order: 1 },
+    ],
+  },
 ]
-let nextPersonaId = 2
-let nextCriterionId = 3
+let nextPersonaId = 3
+let nextCriterionId = 5
 
 interface PersonaBody {
   name: string
@@ -167,6 +189,7 @@ interface PersonaBody {
   conversationModelId?: number
   scoringModelId?: number
   isPublished?: boolean
+  languages?: string[]
   scoreCriteria?: { name: string; description?: string; maxScore: number; weight: number; order: number }[]
 }
 
@@ -293,6 +316,11 @@ export const handlers = [
       name: p.name,
       description: p.description ?? null,
       color: p.color ?? null,
+      isPublished: p.isPublished ?? false,
+      languages: p.languages ?? [],
+      // Mirror the real backend's full-row payload so the list can tell whether
+      // voice is enabled (templateData.channels includes 'audio').
+      templateData: p.templateData,
     }))
     return ok({ personas, total: personas.length })
   }),
@@ -771,6 +799,7 @@ export const handlers = [
       conversationModelId: body.conversationModelId ?? null,
       scoringModelId: body.scoringModelId ?? null,
       isPublished: body.isPublished ?? false,
+      languages: body.languages ?? [],
       scoreCriteria: (body.scoreCriteria ?? []).map((c) => ({
         id: nextCriterionId++,
         name: c.name,
@@ -805,6 +834,7 @@ export const handlers = [
         : {}),
       ...(body.conversationModelId !== undefined ? { conversationModelId: body.conversationModelId } : {}),
       ...(body.scoringModelId !== undefined ? { scoringModelId: body.scoringModelId } : {}),
+      ...(body.languages !== undefined ? { languages: body.languages } : {}),
       ...(body.scoreCriteria !== undefined
         ? {
             scoreCriteria: body.scoreCriteria.map((c) => ({

@@ -1,16 +1,24 @@
 import { z } from 'zod';
 
-// Providers are configured FROM the master catalog: pick a master, supply a key.
-// `name` defaults to the master's display name; `baseUrl` overrides the master's
-// default (self-hosted gateways etc.).
-export const CreateProviderDtoSchema = z.object({
-  masterProviderId: z.number().int().positive(),
-  apiKey: z.string().min(1), // write-only; encrypted into credentialRef, never returned
-  name: z.string().min(1).max(100).optional(),
-  baseUrl: z.string().url().optional(),
-  isEnabled: z.boolean().default(true),
-  monthlyBudgetUsd: z.number().positive().optional(),
-});
+// Providers are configured either FROM the master catalog (pick a master, supply
+// a key) OR as a custom provider (no master — declare adapterType + name). `name`
+// defaults to the master's display name; `baseUrl` overrides the master's default
+// (self-hosted gateways etc.).
+export const CreateProviderDtoSchema = z
+  .object({
+    // Master-catalog path: pick a seeded provider.
+    masterProviderId: z.number().int().positive().optional(),
+    // Custom path (no master): declare the adapter + display name yourself.
+    adapterType: z.enum(['openai', 'gemini', 'anthropic', 'custom']).optional(),
+    name: z.string().min(1).max(100).optional(),
+    apiKey: z.string().min(1), // write-only; encrypted into credentialRef, never returned
+    baseUrl: z.string().url().optional(),
+    isEnabled: z.boolean().default(true),
+    monthlyBudgetUsd: z.number().positive().optional(),
+  })
+  .refine((d) => d.masterProviderId != null || (!!d.adapterType && !!d.name), {
+    message: 'Provide masterProviderId, or adapterType + name for a custom provider',
+  });
 
 // No master/type change after creation — delete and re-add instead. `apiKey`
 // present = key rotation (re-encrypt + refresh the masked hint).
@@ -22,14 +30,27 @@ export const UpdateProviderDtoSchema = z.object({
   monthlyBudgetUsd: z.number().positive().nullable().optional(),
 });
 
-// Models are picked from the configured provider's master catalog. Metadata
-// (kind, pricing, context) is copied from the master; voice metadata (pipeline,
-// languages, voices) is always read from the master at runtime.
-export const CreateModelDtoSchema = z.object({
-  providerId: z.number().int().positive(),
-  masterModelId: z.number().int().positive(),
-  isDefault: z.boolean().default(false),
-});
+// Models are added either FROM the provider's master catalog (metadata copied
+// from the master) OR as a custom model (no master — supply the provider-side id
+// + kind, plus optional metadata). Custom VOICE models are rejected in the
+// service: voice needs a master catalog entry for languages/voices at runtime.
+export const CreateModelDtoSchema = z
+  .object({
+    providerId: z.number().int().positive(),
+    // Master-catalog path.
+    masterModelId: z.number().int().positive().optional(),
+    // Custom path (no master): provider-side model id + kind (+ optional metadata).
+    name: z.string().min(1).max(200).optional(),
+    kind: z.enum(['chat', 'voice']).optional(),
+    capabilities: z.array(z.string()).optional(),
+    contextWindowTokens: z.number().int().positive().optional(),
+    inputPricePerMillion: z.number().nonnegative().optional(),
+    outputPricePerMillion: z.number().nonnegative().optional(),
+    isDefault: z.boolean().default(false),
+  })
+  .refine((d) => d.masterModelId != null || (!!d.name && !!d.kind), {
+    message: 'Provide masterModelId, or name + kind for a custom model',
+  });
 
 // Legacy rows (masterModelId null) remain editable; master-linked rows normally
 // only toggle isDefault via promote.

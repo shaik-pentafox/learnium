@@ -10,6 +10,7 @@ import { notify } from "@/lib/toast";
 import { listUsers, deleteUser, userKeys, type UserListItem } from "@/services/users";
 import { listRoles, roleKeys, roleLabel } from "@/services/roles";
 import { Button } from "@/components/ui/button";
+import { ErrorState } from "@/components/ui/error-state";
 import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { UserFormDialog } from "@/components/users/user-form-dialog";
@@ -165,12 +166,7 @@ function UsersPage() {
 
       {/* Table */}
       {users.isError ? (
-        <div className="rounded-lg border border-border bg-surface p-4 text-sm">
-          <span className="text-destructive">Couldn’t load users.</span>{" "}
-          <button type="button" onClick={() => users.refetch()} className="text-primary hover:underline">
-            Retry
-          </button>
-        </div>
+        <ErrorState title="Couldn’t load users" onRetry={() => users.refetch()} />
       ) : (
         <DataTable
           columns={columns}

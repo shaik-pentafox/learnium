@@ -46,6 +46,13 @@
   --accent: #eef2ff; /* indigo-50 — accent-soft */
   --accent-foreground: #4f46e5;
 
+  /* Registry (fluidfunctionalism) tokens — slider + color-picker read these for
+     their fill / active / focus states. Map to brand so the accent shows.
+     var() indirection makes them follow the light/dark theme automatically. */
+  --active: var(--primary);
+  --selected: var(--primary);
+  --focus-ring: var(--ring);
+
   /* Semantic status */
   --success: #16a34a;
   --success-soft: #dcfce7;
@@ -89,6 +96,22 @@
   --chart-marker-foreground: oklch(0.3 0.01 260);
   --chart-ring-background: oklch(0.9 0.005 260 / 0.25);
   --chart-label: oklch(0.45 0.01 260);
+  --surface-1: #FAFAFA;
+  --surface-3: #FFFFFF;
+  --surface-4: #FFFFFF;
+  --surface-5: #FFFFFF;
+  --surface-6: #FFFFFF;
+  --surface-7: #FFFFFF;
+  --surface-8: #FFFFFF;
+  --shadow-color: rgb(0 0 0 / 0.06);
+  --shadow-1: 0 0 0 1px var(--shadow-color);
+  --shadow-2: 0 0 0 1px var(--shadow-color), 0 1px 1px -0.5px var(--shadow-color);
+  --shadow-3: 0 0 0 1px var(--shadow-color), 0 1px 1px -0.5px var(--shadow-color), 0 3px 3px -1.5px var(--shadow-color);
+  --shadow-4: 0 0 0 1px var(--shadow-color), 0 1px 1px -0.5px var(--shadow-color), 0 3px 3px -1.5px var(--shadow-color), 0 6px 6px -3px var(--shadow-color);
+  --shadow-5: 0 0 0 1px var(--shadow-color), 0 1px 1px -0.5px var(--shadow-color), 0 3px 3px -1.5px var(--shadow-color), 0 6px 6px -3px var(--shadow-color), 0 12px 12px -6px var(--shadow-color);
+  --shadow-6: 0 0 0 1px var(--shadow-color), 0 1px 1px -0.5px var(--shadow-color), 0 3px 3px -1.5px var(--shadow-color), 0 6px 6px -3px var(--shadow-color), 0 12px 12px -6px var(--shadow-color), 0 24px 24px -12px var(--shadow-color);
+  --shadow-7: 0 0 0 1px var(--shadow-color), 0 1px 1px -0.5px var(--shadow-color), 0 3px 3px -1.5px var(--shadow-color), 0 6px 6px -3px var(--shadow-color), 0 12px 12px -6px var(--shadow-color), 0 24px 24px -12px var(--shadow-color), 0 48px 48px -24px var(--shadow-color);
+  --shadow-8: 0 0 0 1px var(--shadow-color), 0 1px 1px -0.5px var(--shadow-color), 0 3px 3px -1.5px var(--shadow-color), 0 6px 6px -3px var(--shadow-color), 0 12px 12px -6px var(--shadow-color), 0 24px 24px -12px var(--shadow-color), 0 48px 48px -24px var(--shadow-color), 0 96px 96px -48px var(--shadow-color);
 }
 
 .dark {
@@ -149,6 +172,29 @@
   --chart-marker-foreground: oklch(0.9 0 0);
   --chart-ring-background: oklch(0.35 0.01 260 / 0.25);
   --chart-label: oklch(0.75 0.01 260);
+  --surface-1: #171717;
+  --surface-3: #252525;
+  --surface-4: #2C2C2C;
+  --surface-5: #333333;
+  --surface-6: #3A3A3A;
+  --surface-7: #414141;
+  --surface-8: #484848;
+  --dm-hi-base: rgba(255,255,255,0.01);
+  --dm-hi-mid: rgba(255,255,255,0.02);
+  --dm-hi-high: rgba(255,255,255,0.04);
+  --dm-hi-peak: rgba(255,255,255,0.06);
+  --dm-ring-base: rgba(255,255,255,0.02);
+  --dm-ring-mid: rgba(255,255,255,0.04);
+  --dm-ring-high: rgba(255,255,255,0.06);
+  --dm-drop: rgba(0,0,0,0.18);
+  --shadow-1: inset 0 0 0 1px var(--dm-ring-base);
+  --shadow-2: inset 0 1px 0 0 var(--dm-hi-base), inset 0 0 0 1px var(--dm-ring-base), 0 1px 1px -0.5px var(--dm-drop);
+  --shadow-3: inset 0 1px 0 0 var(--dm-hi-mid), inset 0 0 0 1px var(--dm-ring-base), 0 0 0 1px rgba(0,0,0,0.12), 0 1px 1px -0.5px var(--dm-drop), 0 3px 3px -1.5px var(--dm-drop);
+  --shadow-4: inset 0 1px 0 0 var(--dm-hi-mid), inset 0 0 0 1px var(--dm-ring-mid), 0 0 0 1px rgba(0,0,0,0.14), 0 1px 1px -0.5px var(--dm-drop), 0 3px 3px -1.5px var(--dm-drop), 0 6px 6px -3px var(--dm-drop);
+  --shadow-5: inset 0 1px 0 0 var(--dm-hi-high), inset 0 0 0 1px var(--dm-ring-mid), 0 0 0 1px rgba(0,0,0,0.16), 0 1px 1px -0.5px var(--dm-drop), 0 3px 3px -1.5px var(--dm-drop), 0 6px 6px -3px var(--dm-drop), 0 12px 12px -6px var(--dm-drop);
+  --shadow-6: inset 0 1px 0 0 var(--dm-hi-high), inset 0 0 0 1px var(--dm-ring-high), 0 0 0 1px rgba(0,0,0,0.18), 0 1px 1px -0.5px var(--dm-drop), 0 3px 3px -1.5px var(--dm-drop), 0 6px 6px -3px var(--dm-drop), 0 12px 12px -6px var(--dm-drop), 0 24px 24px -12px var(--dm-drop);
+  --shadow-7: inset 0 1px 0 0 var(--dm-hi-peak), inset 0 0 0 1px var(--dm-ring-high), 0 0 0 1px rgba(0,0,0,0.20), 0 1px 1px -0.5px var(--dm-drop), 0 3px 3px -1.5px var(--dm-drop), 0 6px 6px -3px var(--dm-drop), 0 12px 12px -6px var(--dm-drop), 0 24px 24px -12px var(--dm-drop), 0 48px 48px -24px var(--dm-drop);
+  --shadow-8: inset 0 1px 0 0 var(--dm-hi-peak), inset 0 0 0 1px var(--dm-ring-high), 0 0 0 1px rgba(0,0,0,0.22), 0 1px 1px -0.5px var(--dm-drop), 0 3px 3px -1.5px var(--dm-drop), 0 6px 6px -3px var(--dm-drop), 0 12px 12px -6px var(--dm-drop), 0 24px 24px -12px var(--dm-drop), 0 48px 48px -24px var(--dm-drop), 0 96px 96px -48px var(--dm-drop);
 }
 
 /* Expose tokens to Tailwind utilities (bg-background, text-foreground, …). */
@@ -175,6 +221,8 @@
   --color-secondary-foreground: var(--secondary-foreground);
   --color-accent: var(--accent);
   --color-accent-foreground: var(--accent-foreground);
+  --color-selected: var(--selected);
+  --color-active: var(--active);
 
   --color-success: var(--success);
   --color-success-soft: var(--success-soft);
@@ -224,6 +272,38 @@
   --color-chart-foreground-muted: var(----chart-foreground-muted);
   --color-chart-foreground: var(----chart-foreground);
   --color-chart-background: var(----chart-background);
+  --color-surface-1: var(--surface-1);
+  --color-surface-3: var(--surface-3);
+  --color-surface-4: var(--surface-4);
+  --color-surface-5: var(--surface-5);
+  --color-surface-6: var(--surface-6);
+  --color-surface-7: var(--surface-7);
+  --color-surface-8: var(--surface-8);
+  --shadow-surface-1: var(--shadow-1);
+  --shadow-surface-2: var(--shadow-2);
+  --shadow-surface-3: var(--shadow-3);
+  --shadow-surface-4: var(--shadow-4);
+  --shadow-surface-5: var(--shadow-5);
+  --shadow-surface-6: var(--shadow-6);
+  --shadow-surface-7: var(--shadow-7);
+  --shadow-surface-8: var(--shadow-8);
+  --color-dm-drop: var(--dm-drop);
+  --color-dm-ring-high: var(--dm-ring-high);
+  --color-dm-ring-mid: var(--dm-ring-mid);
+  --color-dm-ring-base: var(--dm-ring-base);
+  --color-dm-hi-peak: var(--dm-hi-peak);
+  --color-dm-hi-high: var(--dm-hi-high);
+  --color-dm-hi-mid: var(--dm-hi-mid);
+  --color-dm-hi-base: var(--dm-hi-base);
+  --shadow-8: var(--shadow-8);
+  --shadow-7: var(--shadow-7);
+  --shadow-6: var(--shadow-6);
+  --shadow-5: var(--shadow-5);
+  --shadow-4: var(--shadow-4);
+  --shadow-3: var(--shadow-3);
+  --shadow-2: var(--shadow-2);
+  --shadow-1: var(--shadow-1);
+  --color-shadow-color: var(--shadow-color);
 }
 
 @layer base {
@@ -294,4 +374,25 @@
 }
 .scrollbar-hide::-webkit-scrollbar {
   display: none;
+}
+
+/* react-colorful — themed to match the app (rounded field + pill hue bar).
+   Scoped under .tn-color-picker (the persona accent picker popover). */
+.tn-color-picker .react-colorful {
+  width: 100%;
+  height: 168px;
+  gap: 10px;
+}
+.tn-color-picker .react-colorful__saturation {
+  border-radius: var(--radius, 8px);
+  border-bottom: none;
+}
+.tn-color-picker .react-colorful__hue {
+  height: 14px;
+  border-radius: 9999px;
+}
+.tn-color-picker .react-colorful__pointer {
+  width: 16px;
+  height: 16px;
+  border-width: 2px;
 }

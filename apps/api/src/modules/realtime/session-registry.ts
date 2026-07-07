@@ -8,6 +8,8 @@ export interface WsClient {
   userId: number;
   sessionDbId?: number;
   sessionUid?: string;
+  /** Persona test/simulation session — usage is tagged so analytics can exclude it. */
+  isSimulation?: boolean;
   personaName?: string;
   /** Per-session compiled LangGraph (model + system prompt bound). */
   graph?: RoleplayGraph;

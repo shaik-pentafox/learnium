@@ -2,6 +2,7 @@ import { describe, it, expect } from '@jest/globals';
 import {
   PersonaTemplateSchema,
   renderSystemPrompt,
+  channelStyleBlock,
   type PersonaTemplateInput,
 } from './persona-prompt.template';
 
@@ -9,7 +10,7 @@ const base: PersonaTemplateInput = {
   customerProfile: 'Premium subscriber for 3 years',
   company: 'Nimbus Telecom',
   issue: 'charged twice for this month bill',
-  channel: 'chat',
+  channels: ['chat'],
   emotion: 'frustrated',
   intensity: 4,
   desiredOutcome: 'a refund of the duplicate charge',
@@ -17,10 +18,21 @@ const base: PersonaTemplateInput = {
 };
 
 describe('PersonaTemplateSchema', () => {
-  it('accepts a minimal valid template and defaults channel to chat', () => {
-    const { channel: _channel, ...withoutChannel } = base;
-    const parsed = PersonaTemplateSchema.parse(withoutChannel);
-    expect(parsed.channel).toBe('chat');
+  it('defaults channels to [chat] when omitted', () => {
+    const { channels: _channels, ...withoutChannels } = base;
+    const parsed = PersonaTemplateSchema.parse(withoutChannels);
+    expect(parsed.channels).toEqual(['chat']);
+  });
+
+  it('folds a legacy single `channel` into `channels`', () => {
+    const { channels: _channels, ...withoutChannels } = base;
+    const parsed = PersonaTemplateSchema.parse({ ...withoutChannels, channel: 'audio' });
+    expect(parsed.channels).toEqual(['audio']);
+  });
+
+  it('accepts a persona that supports both channels', () => {
+    const parsed = PersonaTemplateSchema.parse({ ...base, channels: ['chat', 'audio'] });
+    expect(parsed.channels).toEqual(['chat', 'audio']);
   });
 
   it('rejects an empty issue', () => {
@@ -77,16 +89,15 @@ describe('renderSystemPrompt', () => {
     expect(prompt).toContain('mention you are short on time');
   });
 
-  it('uses chat-style guidance for the chat channel', () => {
-    const prompt = renderSystemPrompt({ ...base, channel: 'chat' });
-    expect(prompt).toContain('live text chat');
-    expect(prompt).not.toContain('spoken phone call');
+  it('does not bake channel-style into the prompt (injected per session modality)', () => {
+    const both = renderSystemPrompt({ ...base, channels: ['chat', 'audio'] });
+    expect(both).not.toContain('live text chat');
+    expect(both).not.toContain('spoken phone call');
   });
 
-  it('uses spoken guidance for the audio channel', () => {
-    const prompt = renderSystemPrompt({ ...base, channel: 'audio' });
-    expect(prompt).toContain('spoken phone call');
-    expect(prompt).not.toContain('live text chat');
+  it('channelStyleBlock emits the directive for the live modality', () => {
+    expect(channelStyleBlock('chat')).toContain('live text chat');
+    expect(channelStyleBlock('audio')).toContain('spoken phone call');
   });
 
   it('always instructs the customer to open on the BEGIN cue', () => {

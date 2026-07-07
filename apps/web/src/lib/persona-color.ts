@@ -1,6 +1,20 @@
 /** Default persona accent (indigo) when none is configured. */
 export const DEFAULT_PERSONA_COLOR = '#6366f1'
 
+/** Curated brand accents offered as quick-pick swatches in the color picker. */
+export const PERSONA_SWATCHES = [
+  '#6366f1', // indigo (brand)
+  '#8b5cf6', // violet
+  '#3b82f6', // blue
+  '#14b8a6', // teal
+  '#10b981', // emerald
+  '#f59e0b', // amber
+  '#f43f5e', // rose
+  '#ec4899', // pink
+  '#ef4444', // red
+  '#64748b', // slate
+] as const
+
 export function isHexColor(value?: string | null): value is string {
   return !!value && /^#[0-9a-fA-F]{6}$/.test(value)
 }

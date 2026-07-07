@@ -1,12 +1,31 @@
+import { useState } from "react";
 import { createFileRoute, redirect, Link, useNavigate } from "@tanstack/react-router";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { Plus, Pencil, Drama, Rocket } from "lucide-react";
+import { Plus, Pencil, Drama, Rocket, Mic } from "lucide-react";
 import { listMyPersonas, personaKeys, type PersonaSummary } from "@/services/personas";
 import { startSession } from "@/services/roleplay";
+import { ErrorState } from "@/components/ui/error-state";
 import { useAuthStore } from "@/stores/auth";
 import { personaOrbColors } from "@/lib/persona-color";
 import { notify } from "@/lib/toast";
 import { Button, buttonVariants } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogFooter,
+  DialogTitle,
+  DialogDescription,
+} from "@/components/ui/dialog";
+
+const LANG_DISPLAY = new Intl.DisplayNames(["en"], { type: "language" });
+function langLabel(code: string): string {
+  try {
+    return LANG_DISPLAY.of(code) ?? code;
+  } catch {
+    return code;
+  }
+}
 
 export const Route = createFileRoute("/_auth/personas/")({
   beforeLoad: () => {
@@ -26,11 +45,46 @@ function PersonasListPage() {
   });
 
   // Owner "Test" = a simulation session against this persona (draft or published).
-  const test = useMutation({
+  // Chat test opens a text session; voice test opens the same session in voice
+  // mode (?voice=<lang>) — a dry-run of the persona's configured voice roleplay.
+  const [voicePicker, setVoicePicker] = useState<PersonaSummary | null>(null);
+  const [launchingId, setLaunchingId] = useState<number | null>(null);
+
+  const start = useMutation({
     mutationFn: (personaId: number) => startSession(personaId, { simulation: true }),
-    onSuccess: ({ uid }) => navigate({ to: "/session/$uid", params: { uid } }),
-    onError: (err) => notify.error(err),
   });
+
+  async function launchChat(personaId: number) {
+    setLaunchingId(personaId);
+    try {
+      const { uid } = await start.mutateAsync(personaId);
+      await navigate({ to: "/session/$uid", params: { uid } });
+    } catch (err) {
+      notify.error(err);
+    } finally {
+      setLaunchingId(null);
+    }
+  }
+
+  async function launchVoice(persona: PersonaSummary, langCode: string) {
+    setVoicePicker(null);
+    setLaunchingId(persona.id);
+    try {
+      const { uid } = await start.mutateAsync(persona.id);
+      await navigate({ to: "/session/$uid", params: { uid }, search: { voice: langCode } });
+    } catch (err) {
+      notify.error(err);
+    } finally {
+      setLaunchingId(null);
+    }
+  }
+
+  function onVoiceClick(persona: PersonaSummary) {
+    const langs = persona.languages ?? [];
+    if (langs.length === 0) return;
+    if (langs.length === 1) void launchVoice(persona, langs[0]!);
+    else setVoicePicker(persona);
+  }
 
   return (
     <div className="space-y-6">
@@ -46,14 +100,7 @@ function PersonasListPage() {
       </header>
 
       {isPending && <ListSkeleton />}
-      {isError && (
-        <div className="rounded-lg border border-border bg-surface p-4 text-sm">
-          <p className="text-destructive">Couldn’t load personas.</p>
-          <button type="button" onClick={() => refetch()} className="mt-2 text-primary hover:underline">
-            Retry
-          </button>
-        </div>
-      )}
+      {isError && <ErrorState title="Couldn’t load personas" onRetry={() => refetch()} />}
 
       {data && data.personas.length === 0 && (
         <div className="rounded-lg border border-dashed border-border bg-surface px-4 py-10 text-center">
@@ -69,15 +116,66 @@ function PersonasListPage() {
       {data && data.personas.length > 0 && (
         <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {data.personas.map((p) => (
-            <PersonaCard key={p.id} persona={p} testing={test.isPending && test.variables === p.id} onTest={() => test.mutate(p.id)} />
+            <PersonaCard
+              key={p.id}
+              persona={p}
+              testing={launchingId === p.id}
+              onChat={() => launchChat(p.id)}
+              onVoice={() => onVoiceClick(p)}
+            />
           ))}
         </ul>
       )}
+
+      {/* Language picker for a voice test against a multi-language persona */}
+      <Dialog open={voicePicker !== null} onOpenChange={(v) => { if (!v) setVoicePicker(null); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Choose language</DialogTitle>
+            <DialogDescription>
+              Pick the language for this voice test session.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-2 py-2">
+            {(voicePicker?.languages ?? []).map((code) => (
+              <Button
+                key={code}
+                variant="secondary"
+                className="h-11 justify-start gap-3"
+                onClick={() => voicePicker && launchVoice(voicePicker, code)}
+              >
+                <Mic className="size-4 shrink-0 text-muted-foreground" />
+                <span>{langLabel(code)}</span>
+                <span className="ml-auto font-mono text-xs text-muted-foreground">{code}</span>
+              </Button>
+            ))}
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setVoicePicker(null)}>
+              Cancel
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
 
-function PersonaCard({ persona, testing, onTest }: { persona: PersonaSummary; testing: boolean; onTest: () => void }) {
+function PersonaCard({
+  persona,
+  testing,
+  onChat,
+  onVoice,
+}: {
+  persona: PersonaSummary;
+  testing: boolean;
+  onChat: () => void;
+  onVoice: () => void;
+}) {
+  // Voice is testable only when the persona actually enables the voice call
+  // (channels includes 'audio') AND has ≥1 language to run it in.
+  const voiceEnabled = persona.templateData?.channels?.includes("audio") ?? false;
+  const canVoice = voiceEnabled && (persona.languages?.length ?? 0) > 0;
   return (
     <li className="group relative flex flex-col rounded-xl border border-border bg-surface p-4 transition-colors hover:border-primary/40">
       <div className="mb-3 flex items-start gap-3">
@@ -98,10 +196,16 @@ function PersonaCard({ persona, testing, onTest }: { persona: PersonaSummary; te
             Edit
           </Link>
         )}
-        <Button size="sm" onClick={onTest} disabled={testing}>
+        <Button size="sm" onClick={onChat} disabled={testing}>
           <Rocket className="size-4" />
-          {testing ? "Starting…" : "Test"}
+          {testing ? "Starting…" : canVoice ? "Test chat" : "Test"}
         </Button>
+        {canVoice && (
+          <Button size="sm" variant="secondary" onClick={onVoice} disabled={testing}>
+            <Mic className="size-4" />
+            {testing ? "Starting…" : "Test voice"}
+          </Button>
+        )}
       </div>
     </li>
   );

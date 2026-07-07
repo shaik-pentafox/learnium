@@ -15,6 +15,7 @@ import { DomainException } from '../errors/domain.errors';
 import { ErrorCode } from '@traineon/contracts';
 import type { Env } from '../config/env.schema';
 import { LlmFlowLogger } from './llm-flow.logger';
+import { ProviderBudgetService } from './provider-budget.service';
 
 /** Replicas publish here when the registry changes so every node drops its model cache. */
 export const MODEL_CACHE_CHANNEL = 'llm:model-cache:invalidate';
@@ -22,10 +23,12 @@ export const MODEL_CACHE_CHANNEL = 'llm:model-cache:invalidate';
 const OPENROUTER_BASE = 'https://openrouter.ai/api/v1';
 
 interface ProviderRecord {
+  id: number;
   type: string;
   baseUrl: string | null;
   credentialRef: string | null;
   isEnabled: boolean;
+  monthlyBudgetUsd: number | null;
   /** Master catalog link — preferred source of the runtime adapter branch. */
   masterProvider: { adapterType: string } | null;
 }
@@ -67,6 +70,7 @@ export class ModelFactoryService {
     private readonly config: ConfigService<Env, true>,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
     private readonly flowLog: LlmFlowLogger,
+    private readonly budget: ProviderBudgetService,
   ) {
     this.sub = this.redis.duplicate();
     void this.sub.subscribe(MODEL_CACHE_CHANNEL).then(() => {
@@ -84,6 +88,11 @@ export class ModelFactoryService {
     });
     try {
       const record = await this.loadModel(modelId);
+      // Stop resolving models once the provider's monthly budget is spent.
+      await this.budget.assertWithinBudget(
+        record.provider.id,
+        record.provider.monthlyBudgetUsd,
+      );
       const cacheHit = this.cache.has(record.id);
       const model = this.getOrBuild(record);
       span.complete({

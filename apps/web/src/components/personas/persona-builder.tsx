@@ -14,6 +14,7 @@ import {
   ClipboardCheck,
   ChevronLeft,
   ChevronRight,
+  Check,
   Play,
   Square,
   Loader2,
@@ -35,6 +36,7 @@ import {
   personaOrbColors,
   isHexColor,
   DEFAULT_PERSONA_COLOR,
+  PERSONA_SWATCHES,
 } from '@/lib/persona-color'
 import { listModels, llmKeys } from '@/services/llm'
 import {
@@ -54,13 +56,15 @@ import {
   CHANNELS,
   EMOTIONS,
   GENDERS,
+  type Channel,
   type Persona,
   type PersonaInput,
   type PersonaTemplate,
   type ScoreCriterionInput,
 } from '@/services/personas'
 import { NumberField } from '../ui/number-field'
-import { Slider } from '@/components/ui/slider'
+import { SliderComfortable } from '@/components/ui/slider'
+import { ColorPickerPopover } from '@/components/ui/color-picker'
 
 const EMOTION_LABELS: Record<(typeof EMOTIONS)[number], string> = {
   calm: 'Calm',
@@ -117,7 +121,7 @@ function emptyTemplate(): PersonaTemplate {
     company: '',
     productContext: '',
     issue: '',
-    channel: 'chat',
+    channels: ['chat'],
     emotion: 'frustrated',
     intensity: 3,
     escalationTriggers: '',
@@ -134,7 +138,15 @@ function emptyTemplate(): PersonaTemplate {
 
 function toTemplate(persona?: Persona): PersonaTemplate {
   if (!persona?.templateData) return emptyTemplate()
-  return { ...emptyTemplate(), ...persona.templateData }
+  const data = persona.templateData as Partial<PersonaTemplate> & { channel?: Channel }
+  // Fold a legacy single `channel` into `channels` (pre-multi-select personas).
+  const channels =
+    Array.isArray(data.channels) && data.channels.length
+      ? data.channels
+      : data.channel
+        ? [data.channel]
+        : ['chat']
+  return { ...emptyTemplate(), ...data, channels: channels as Channel[] }
 }
 
 interface CriterionRow extends ScoreCriterionInput {
@@ -155,6 +167,86 @@ function toRows(persona?: Persona): CriterionRow[] {
     weight: c.weight,
     order: i,
   }))
+}
+
+// Character caps — mirror the backend Zod maxes (persona.dto.ts +
+// persona-prompt.template.ts) so the UI restricts what the API would reject.
+const LIMITS = {
+  name: 200,
+  description: 300,
+  customerName: 120,
+  customerContact: 120,
+  accountRef: 120,
+  company: 200,
+  customerProfile: 2000,
+  productContext: 2000,
+  issue: 2000,
+  escalationTriggers: 1000,
+  deescalationTriggers: 1000,
+  desiredOutcome: 2000,
+  resolutionCriteria: 2000,
+  closingStatement: 500,
+  hiddenDetails: 2000,
+  behaviorNotes: 2000,
+  additionalInstructions: 2000,
+  openingMessage: 2000,
+  criterionName: 100,
+} as const
+
+function CharCounter({ value, max }: { value: string; max: number }) {
+  const len = value.length
+  return (
+    <span
+      className={`pointer-events-none mt-1 block text-right text-[11px] tabular-nums ${
+        len >= max
+          ? 'text-destructive'
+          : len >= max * 0.9
+            ? 'text-amber-600 dark:text-amber-400'
+            : 'text-muted-foreground'
+      }`}
+    >
+      {len}/{max}
+    </span>
+  )
+}
+
+type LimitedInputProps = Omit<
+  React.ComponentProps<typeof Input>,
+  'value' | 'onChange' | 'maxLength'
+> & { value: string; onChange: (value: string) => void; max: number }
+
+// Text input that hard-caps length (native maxLength) + shows a live counter.
+function LimitedInput({ value, onChange, max, ...rest }: LimitedInputProps) {
+  return (
+    <>
+      <Input
+        value={value}
+        maxLength={max}
+        onChange={(e) => onChange(e.target.value)}
+        {...rest}
+      />
+      <CharCounter value={value} max={max} />
+    </>
+  )
+}
+
+type LimitedTextareaProps = Omit<
+  React.ComponentProps<typeof Textarea>,
+  'value' | 'onChange' | 'maxLength'
+> & { value: string; onChange: (value: string) => void; max: number }
+
+function LimitedTextarea({ value, onChange, max, ...rest }: LimitedTextareaProps) {
+  return (
+    <>
+      <Textarea
+        value={value}
+        maxLength={max}
+        onChange={(e) => onChange(e.target.value)}
+        {...rest}
+      />
+      <CharCounter value={value} max={max} />
+    </>
+  )
 }
 
 export function PersonaBuilder({ persona }: { persona?: Persona }) {
@@ -202,6 +294,19 @@ export function PersonaBuilder({ persona }: { persona?: Persona }) {
     queryFn: () => listVoices(pinnedVoiceModelId),
   })
 
+  // Voices matching the persona's gender. Unset gender → all; a voice with no
+  // gender designation (null) shows for anyone (fail-open, never hides all).
+  const genderedVoices = voiceOptions.data?.filter(
+    (v) => !template.gender || !v.gender || v.gender === template.gender,
+  )
+
+  // When gender (or the model's catalog) changes, drop a now-hidden voice pick.
+  useEffect(() => {
+    if (!voiceId || !genderedVoices) return
+    if (!genderedVoices.some((v) => v.voiceId === voiceId)) setVoiceId('')
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [template.gender, voiceOptions.data])
+
   function toggleLanguage(code: string) {
     setLanguages((prev) =>
       prev.includes(code) ? prev.filter((c) => c !== code) : [...prev, code],
@@ -210,6 +315,22 @@ export function PersonaBuilder({ persona }: { persona?: Persona }) {
 
   function setField<K extends keyof PersonaTemplate>(key: K, value: PersonaTemplate[K]) {
     setTemplate((prev) => ({ ...prev, [key]: value }))
+  }
+
+  // Multi-select channel toggle — always leaves at least one modality on.
+  function toggleChannel(c: Channel) {
+    const next = template.channels.includes(c)
+      ? template.channels.filter((x) => x !== c)
+      : [...template.channels, c]
+    if (!next.length) return
+    setTemplate((prev) => ({ ...prev, channels: next }))
+    // Turning voice OFF clears its config, so "has languages" stays a reliable
+    // signal that voice is actually enabled (the list gates its voice test on
+    // this — no stale languages from a persona that's no longer voice).
+    if (!next.includes('audio')) {
+      setLanguages([])
+      setVoiceId('')
+    }
   }
 
   function buildInput(): PersonaInput {
@@ -253,17 +374,29 @@ export function PersonaBuilder({ persona }: { persona?: Persona }) {
 
   // Launch = save, then open a roleplay session against the saved persona.
   const launch = useMutation({
-    mutationFn: async (input: PersonaInput) => {
+    mutationFn: async ({ input, mode }: { input: PersonaInput; mode: Channel }) => {
       const saved = isEdit ? await updatePersona(persona.id, input) : await createPersona(input)
-      return startSession(saved.id, { simulation: true })
+      const session = await startSession(saved.id, { simulation: true })
+      // Voice test runs in voice mode (?voice=<lang>); chat test in text mode.
+      const voiceLang = mode === 'audio' ? (input.languages?.[0] ?? null) : null
+      return { uid: session.uid, voiceLang }
     },
-    onSuccess: (session) => {
+    onSuccess: ({ uid, voiceLang }) => {
       queryClient.invalidateQueries({ queryKey: personaKeys.mine() })
-      navigate({ to: '/session/$uid', params: { uid: session.uid } })
+      navigate({
+        to: '/session/$uid',
+        params: { uid },
+        search: voiceLang ? { voice: voiceLang } : {},
+      })
     },
     onError: () => notify.error('Could not launch session'),
   })
 
+  // Channels are the persona's modalities (multi-select): 'chat' = text roleplay,
+  // 'audio' = voice call, or both. Voice is enabled only when 'audio' is on, and
+  // a voice persona needs ≥1 spoken language.
+  const isVoice = template.channels.includes('audio')
+  const isChat = template.channels.includes('chat')
   const busy = save.isPending || launch.isPending || togglePublish.isPending
   const missing = [
     name.trim() ? null : 'name',
@@ -272,6 +405,7 @@ export function PersonaBuilder({ persona }: { persona?: Persona }) {
     template.issue.trim() ? null : 'issue',
     template.desiredOutcome.trim() ? null : 'desired outcome',
     template.resolutionCriteria.trim() ? null : 'winning condition',
+    isVoice && languages.length === 0 ? 'voice language' : null,
   ].filter((m): m is string => m != null)
   const canSave = missing.length === 0
 
@@ -298,20 +432,22 @@ export function PersonaBuilder({ persona }: { persona?: Persona }) {
 
         <StepNav current={step} onJump={setStep} />
 
-        <div className="mt-6 lg:min-h-0 lg:flex-1 lg:overflow-y-auto lg:pr-1">
+        <div className="mt-6 lg:min-h-0 lg:flex-1 lg:overflow-y-auto lg:pr-1 scrollbar-hide">
         {step === 0 && (
           <Section title="Persona" icon={<UserSquare2 className="size-4" />}>
             <Field label="Persona name" hint="Internal label shown in lists.">
-              <Input
+              <LimitedInput
                 value={name}
-                onChange={(e) => setName(e.target.value)}
+                onChange={setName}
+                max={LIMITS.name}
                 placeholder="e.g., Double-charged Dana"
               />
             </Field>
             <Field label="Short description" hint="One line summarising the scenario.">
-              <Input
+              <LimitedInput
                 value={description}
-                onChange={(e) => setDescription(e.target.value)}
+                onChange={setDescription}
+                max={LIMITS.description}
                 placeholder="Billing dispute, frustrated premium customer…"
               />
             </Field>
@@ -322,18 +458,11 @@ export function PersonaBuilder({ persona }: { persona?: Persona }) {
                   agentState="listening"
                   className="size-12 shrink-0"
                 />
-                <input
-                  type="color"
-                  value={isHexColor(color) ? color : DEFAULT_PERSONA_COLOR}
-                  onChange={(e) => setColor(e.target.value)}
-                  aria-label="Pick accent color"
-                  className="size-9 shrink-0 cursor-pointer rounded-md border border-input bg-transparent"
-                />
-                <Input
-                  value={color}
-                  onChange={(e) => setColor(e.target.value)}
-                  placeholder={DEFAULT_PERSONA_COLOR}
-                  className="max-w-[140px] font-data"
+                <ColorPickerPopover
+                  defaultValue={isHexColor(color) ? color : DEFAULT_PERSONA_COLOR}
+                  onValueChange={(v) => setColor(v)}
+                  swatches={PERSONA_SWATCHES}
+                  triggerShowValue
                 />
               </div>
             </Field>
@@ -344,9 +473,10 @@ export function PersonaBuilder({ persona }: { persona?: Persona }) {
           <Section title="The customer" icon={<UserSquare2 className="size-4" />}>
             <div className="grid gap-4 sm:grid-cols-2">
               <Field label="Customer name" hint="Optional, used in character.">
-                <Input
+                <LimitedInput
                   value={template.customerName ?? ''}
-                  onChange={(e) => setField('customerName', e.target.value)}
+                  onChange={(v) => setField('customerName', v)}
+                  max={LIMITS.customerName}
                   placeholder="e.g., Dana"
                 />
               </Field>
@@ -369,23 +499,26 @@ export function PersonaBuilder({ persona }: { persona?: Persona }) {
               </Field>
             </div>
             <Field label="Company they contact">
-              <Input
+              <LimitedInput
                 value={template.company}
-                onChange={(e) => setField('company', e.target.value)}
+                onChange={(v) => setField('company', v)}
+                max={LIMITS.company}
                 placeholder="e.g., Nimbus Telecom"
               />
             </Field>
             <Field label="Customer profile" hint="Who they are / relationship to the company.">
-              <Input
+              <LimitedInput
                 value={template.customerProfile}
-                onChange={(e) => setField('customerProfile', e.target.value)}
+                onChange={(v) => setField('customerProfile', v)}
+                max={LIMITS.customerProfile}
                 placeholder="Premium subscriber for 3 years"
               />
             </Field>
             <Field label="Product context" hint="Optional plan / order / device details.">
-              <Input
+              <LimitedInput
                 value={template.productContext ?? ''}
-                onChange={(e) => setField('productContext', e.target.value)}
+                onChange={(v) => setField('productContext', v)}
+                max={LIMITS.productContext}
                 placeholder="Unlimited plan, billed monthly"
               />
             </Field>
@@ -403,16 +536,18 @@ export function PersonaBuilder({ persona }: { persona?: Persona }) {
                 />
               </Field>
               <Field label="Contact" hint="Phone / email to confirm.">
-                <Input
+                <LimitedInput
                   value={template.customerContact ?? ''}
-                  onChange={(e) => setField('customerContact', e.target.value)}
+                  onChange={(v) => setField('customerContact', v)}
+                  max={LIMITS.customerContact}
                   placeholder="e.g., 555-0142"
                 />
               </Field>
               <Field label="Account ref" hint="Order / ticket ID to confirm.">
-                <Input
+                <LimitedInput
                   value={template.accountRef ?? ''}
-                  onChange={(e) => setField('accountRef', e.target.value)}
+                  onChange={(v) => setField('accountRef', v)}
+                  max={LIMITS.accountRef}
                   placeholder="e.g., #A-1042"
                 />
               </Field>
@@ -423,31 +558,36 @@ export function PersonaBuilder({ persona }: { persona?: Persona }) {
         {step === 2 && (
           <Section title="The scenario" icon={<MessagesSquare className="size-4" />}>
             <Field label="Issue" hint="The single problem that triggered the contact.">
-              <Textarea
+              <LimitedTextarea
                 value={template.issue}
-                onChange={(e) => setField('issue', e.target.value)}
+                onChange={(v) => setField('issue', v)}
+                max={LIMITS.issue}
                 rows={2}
                 placeholder="Charged twice for this month's bill."
               />
             </Field>
             <div className="grid gap-4 sm:grid-cols-2">
-              <Field label="Channel">
+              <Field label="Channels" hint="Text chat, voice call, or both. Drives how the persona is trained and tested.">
                 <div className="flex gap-2">
-                  {CHANNELS.map((c) => (
-                    <button
-                      key={c}
-                      type="button"
-                      onClick={() => setField('channel', c)}
-                      aria-pressed={template.channel === c}
-                      className={`flex-1 rounded-md border px-3 py-2 text-sm transition-colors ${
-                        template.channel === c
-                          ? 'border-primary bg-primary/10 font-medium'
-                          : 'border-border bg-surface hover:bg-muted'
-                      }`}
-                    >
-                      {CHANNEL_LABELS[c]}
-                    </button>
-                  ))}
+                  {CHANNELS.map((c) => {
+                    const on = template.channels.includes(c)
+                    return (
+                      <button
+                        key={c}
+                        type="button"
+                        role="checkbox"
+                        aria-checked={on}
+                        onClick={() => toggleChannel(c)}
+                        className={`flex-1 rounded-md border px-3 py-2 text-sm transition-colors ${
+                          on
+                            ? 'border-primary bg-primary/10 font-medium'
+                            : 'border-border bg-surface hover:bg-muted'
+                        }`}
+                      >
+                        {CHANNEL_LABELS[c]}
+                      </button>
+                    )
+                  })}
                 </div>
               </Field>
               <Field label="Emotion">
@@ -469,34 +609,32 @@ export function PersonaBuilder({ persona }: { persona?: Persona }) {
               </Field>
             </div>
             <Field label="Intensity" hint="How strong the emotion is.">
-              <div className="flex items-center gap-4">
-                <Slider
-                  className="flex-1"
-                  value={[template.intensity]}
-                  onValueChange={(v) => setField('intensity', v[0] ?? template.intensity)}
-                  min={1}
-                  max={5}
-                  step={1}
-                  aria-label="Intensity"
-                />
-                <span className="w-8 text-right text-sm font-medium tabular-nums">
-                  {template.intensity}/5
-                </span>
-              </div>
+              <SliderComfortable
+                value={template.intensity}
+                onChange={(n) => setField('intensity', n)}
+                min={1}
+                max={5}
+                step={1}
+                variant="pips"
+                formatValue={(v) => `${v}/5`}
+                aria-label="Intensity"
+              />
             </Field>
             <div className="grid gap-4 sm:grid-cols-2">
               <Field label="Escalation triggers" hint="What makes them angrier.">
-                <Textarea
+                <LimitedTextarea
                   value={template.escalationTriggers ?? ''}
-                  onChange={(e) => setField('escalationTriggers', e.target.value)}
+                  onChange={(v) => setField('escalationTriggers', v)}
+                  max={LIMITS.escalationTriggers}
                   rows={2}
                   placeholder="Being put on hold, scripted replies…"
                 />
               </Field>
               <Field label="De-escalation triggers" hint="What calms them down.">
-                <Textarea
+                <LimitedTextarea
                   value={template.deescalationTriggers ?? ''}
-                  onChange={(e) => setField('deescalationTriggers', e.target.value)}
+                  onChange={(v) => setField('deescalationTriggers', v)}
+                  max={LIMITS.deescalationTriggers}
                   rows={2}
                   placeholder="A clear apology, a concrete fix…"
                 />
@@ -508,9 +646,10 @@ export function PersonaBuilder({ persona }: { persona?: Persona }) {
         {step === 3 && (
           <Section title="Goal & resolution" icon={<Target className="size-4" />}>
             <Field label="Desired outcome" hint="What resolution the customer wants.">
-              <Input
+              <LimitedInput
                 value={template.desiredOutcome}
-                onChange={(e) => setField('desiredOutcome', e.target.value)}
+                onChange={(v) => setField('desiredOutcome', v)}
+                max={LIMITS.desiredOutcome}
                 placeholder="A refund of the duplicate charge"
               />
             </Field>
@@ -518,9 +657,10 @@ export function PersonaBuilder({ persona }: { persona?: Persona }) {
               label="Winning condition"
               hint="When the customer is satisfied and ends the chat (drives [CONVERSATION_ENDED])."
             >
-              <Input
+              <LimitedInput
                 value={template.resolutionCriteria}
-                onChange={(e) => setField('resolutionCriteria', e.target.value)}
+                onChange={(v) => setField('resolutionCriteria', v)}
+                max={LIMITS.resolutionCriteria}
                 placeholder="The agent confirms the duplicate charge will be refunded"
               />
             </Field>
@@ -528,9 +668,10 @@ export function PersonaBuilder({ persona }: { persona?: Persona }) {
               label="Closing statement"
               hint="Optional. How the customer signs off once satisfied."
             >
-              <Input
+              <LimitedInput
                 value={template.closingStatement ?? ''}
-                onChange={(e) => setField('closingStatement', e.target.value)}
+                onChange={(v) => setField('closingStatement', v)}
+                max={LIMITS.closingStatement}
                 placeholder="Thanks for sorting that out, appreciate it."
               />
             </Field>
@@ -543,25 +684,28 @@ export function PersonaBuilder({ persona }: { persona?: Persona }) {
               label="Hidden details"
               hint="Facts the customer reveals only when the agent asks the right questions."
             >
-              <Textarea
+              <LimitedTextarea
                 value={template.hiddenDetails ?? ''}
-                onChange={(e) => setField('hiddenDetails', e.target.value)}
+                onChange={(v) => setField('hiddenDetails', v)}
+                max={LIMITS.hiddenDetails}
                 rows={2}
                 placeholder="You switched plans mid-cycle, which may be related."
               />
             </Field>
             <Field label="Behaviour notes" hint="Curveballs: threatens to cancel, talks over the agent…">
-              <Textarea
+              <LimitedTextarea
                 value={template.behaviorNotes ?? ''}
-                onChange={(e) => setField('behaviorNotes', e.target.value)}
+                onChange={(v) => setField('behaviorNotes', v)}
+                max={LIMITS.behaviorNotes}
                 rows={2}
                 placeholder="You mention switching to a competitor if this isn't fixed."
               />
             </Field>
             <Field label="Additional instructions" hint="Extra nuance, folded into the prompt.">
-              <Textarea
+              <LimitedTextarea
                 value={template.additionalInstructions ?? ''}
-                onChange={(e) => setField('additionalInstructions', e.target.value)}
+                onChange={(v) => setField('additionalInstructions', v)}
+                max={LIMITS.additionalInstructions}
                 rows={2}
                 placeholder="You are short on time and say so early."
               />
@@ -570,9 +714,10 @@ export function PersonaBuilder({ persona }: { persona?: Persona }) {
               label="Opening message"
               hint="Leave blank to let the model improvise the customer's first line each session."
             >
-              <Textarea
+              <LimitedTextarea
                 value={template.openingMessage ?? ''}
-                onChange={(e) => setField('openingMessage', e.target.value)}
+                onChange={(v) => setField('openingMessage', v)}
+                max={LIMITS.openingMessage}
                 rows={2}
                 placeholder="Hi, I was charged twice this month and I want it refunded."
               />
@@ -602,6 +747,7 @@ export function PersonaBuilder({ persona }: { persona?: Persona }) {
                   <Input
                     value={row.name}
                     onChange={(e) => setRow(row.key, { name: e.target.value })}
+                    maxLength={LIMITS.criterionName}
                     placeholder="Criterion (e.g., De-escalation)"
                     className="flex-1"
                   />
@@ -650,42 +796,64 @@ export function PersonaBuilder({ persona }: { persona?: Persona }) {
                 </Field>
               </Section>
             )}
-            <Section title="Voice" icon={<Mic className="size-4" />} hint="Used for voice sessions. Pick the languages a trainee may speak.">
-              {isAdmin && (
-                <Field label="Voice model" hint="Defaults to the primary voice model if unset.">
-                  <ModelSelect
-                    value={voiceModelId}
-                    onChange={(v) => {
-                      setVoiceModelId(v)
-                      // Language/voice availability changes with the model — reset picks.
-                      setLanguages([])
-                      setVoiceId('')
-                    }}
-                    options={voiceModels}
-                    loading={models.isPending}
-                    defaultLabel="Primary voice model"
+            {isVoice ? (
+              <Section title="Voice" icon={<Mic className="size-4" />} hint="This is a voice-call persona. Configure how it speaks and what languages a trainee may use.">
+                {isAdmin && (
+                  <Field label="Voice model" hint="Defaults to the primary voice model if unset.">
+                    <ModelSelect
+                      value={voiceModelId}
+                      onChange={(v) => {
+                        setVoiceModelId(v)
+                        // Language/voice availability changes with the model — reset picks.
+                        setLanguages([])
+                        setVoiceId('')
+                      }}
+                      options={voiceModels}
+                      loading={models.isPending}
+                      defaultLabel="Primary voice model"
+                    />
+                  </Field>
+                )}
+                <Field label="Languages" hint="Trainee picks one of these when starting the voice session. At least one is required.">
+                  <LanguageChips
+                    selected={languages}
+                    onToggle={toggleLanguage}
+                    options={voiceLanguages.data}
+                    loading={voiceLanguages.isPending}
+                  />
+                  {languages.length === 0 && (
+                    <p className="mt-2 text-xs text-amber-700 dark:text-amber-400">
+                      Pick at least one language — a voice persona can't be saved or tested without one.
+                    </p>
+                  )}
+                </Field>
+                <Field
+                  label="Voice"
+                  hint={
+                    template.gender
+                      ? `Voices matching a ${GENDER_LABELS[template.gender].toLowerCase()} customer. Press play to hear a sample.`
+                      : "The persona's spoken voice. Set a gender in Basics to narrow this list. Press play to hear a sample."
+                  }
+                >
+                  <VoicePicker
+                    voices={genderedVoices}
+                    loading={voiceOptions.isPending}
+                    selected={voiceId}
+                    onSelect={setVoiceId}
+                    previewLanguage={languages[0] ?? 'en-IN'}
+                    voiceModelId={pinnedVoiceModelId}
                   />
                 </Field>
-              )}
-              <Field label="Languages" hint="Trainee picks one of these when starting a voice session. None → text-only.">
-                <LanguageChips
-                  selected={languages}
-                  onToggle={toggleLanguage}
-                  options={voiceLanguages.data}
-                  loading={voiceLanguages.isPending}
-                />
-              </Field>
-              <Field label="Voice" hint="The persona's spoken voice. Press play to hear a sample.">
-                <VoicePicker
-                  voices={voiceOptions.data}
-                  loading={voiceOptions.isPending}
-                  selected={voiceId}
-                  onSelect={setVoiceId}
-                  previewLanguage={languages[0] ?? 'en-IN'}
-                  voiceModelId={pinnedVoiceModelId}
-                />
-              </Field>
-            </Section>
+              </Section>
+            ) : (
+              <Section title="Voice" icon={<Mic className="size-4" />}>
+                <p className="text-sm text-muted-foreground">
+                  This is a <span className="font-medium text-foreground">text-chat</span> persona — voice isn't used.
+                  To configure a spoken voice, set <span className="font-medium text-foreground">Channel</span> to
+                  “Voice call” in the Scenario step.
+                </p>
+              </Section>
+            )}
           </div>
         )}
 
@@ -716,7 +884,7 @@ export function PersonaBuilder({ persona }: { persona?: Persona }) {
 
       {/* ── Review / actions column ───────────────────────────────── */}
       <aside className="w-full shrink-0 lg:flex lg:w-80 lg:min-h-0 lg:flex-col">
-        <div className="space-y-6 lg:min-h-0 lg:flex-1 lg:overflow-y-auto lg:pr-1">
+        <div className="space-y-6 lg:min-h-0 lg:flex-1 lg:overflow-y-auto lg:pr-1 scrollbar-hide">
           <Section title="Overview" icon={<ClipboardCheck className="size-4" />}>
             {!canSave && (
               <p className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
@@ -734,9 +902,15 @@ export function PersonaBuilder({ persona }: { persona?: Persona }) {
               <Summary label="Issue" value={template.issue} />
               <Summary label="Winning condition" value={template.resolutionCriteria} />
               <Summary
-                label="Voice languages"
-                value={languages.length ? languages.join(', ') : 'Text-only'}
+                label="Channels"
+                value={template.channels.map((c) => CHANNEL_LABELS[c]).join(' · ')}
               />
+              {isVoice && (
+                <Summary
+                  label="Voice languages"
+                  value={languages.length ? languages.join(', ') : '—'}
+                />
+              )}
               <Summary
                 label="Criteria"
                 value={`${criteria.filter((c) => c.name.trim()).length} defined`}
@@ -744,7 +918,7 @@ export function PersonaBuilder({ persona }: { persona?: Persona }) {
             </dl>
           </Section>
 
-          {isEdit && persona?.systemPrompt && (
+          {isEdit && isAdmin && persona?.systemPrompt && (
             <Section title="Rendered prompt" hint="Read-only preview of the generated system prompt.">
               <pre className="max-h-64 overflow-auto whitespace-pre-wrap rounded-md bg-muted p-3 font-data text-xs text-muted-foreground">
                 {persona.systemPrompt}
@@ -806,17 +980,36 @@ export function PersonaBuilder({ persona }: { persona?: Persona }) {
               </Button>
             </>
           )}
-          <Button
-            type="button"
-            variant="ghost"
-            size="lg"
-            className="w-full"
-            disabled={!canSave || busy}
-            onClick={() => launch.mutate(buildInput())}
-          >
-            <Rocket />
-            {launch.isPending ? 'Launching…' : 'Save & test'}
-          </Button>
+          {isChat && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="lg"
+              className="w-full"
+              disabled={!canSave || busy}
+              onClick={() => launch.mutate({ input: buildInput(), mode: 'chat' })}
+            >
+              <Rocket />
+              {launch.isPending && launch.variables?.mode === 'chat'
+                ? 'Launching…'
+                : 'Save & chat test'}
+            </Button>
+          )}
+          {isVoice && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="lg"
+              className="w-full"
+              disabled={!canSave || busy}
+              onClick={() => launch.mutate({ input: buildInput(), mode: 'audio' })}
+            >
+              <Mic />
+              {launch.isPending && launch.variables?.mode === 'audio'
+                ? 'Launching…'
+                : 'Save & voice test'}
+            </Button>
+          )}
         </div>
       </aside>
     </form>
@@ -825,10 +1018,13 @@ export function PersonaBuilder({ persona }: { persona?: Persona }) {
 
 function StepNav({ current, onJump }: { current: number; onJump: (i: number) => void }) {
   return (
-    <nav className="flex gap-1.5 overflow-x-auto pb-1">
+    <nav className="flex gap-1.5 overflow-x-auto pb-1 scrollbar-hide">
       {STEPS.map((s, i) => {
         const active = i === current
         const done = i < current
+        // "Reached" = current or any earlier step → active-styled so progress
+        // reads at a glance (step 3 shows 1 + 2 as completed, not just 3).
+        const reached = i <= current
         return (
           <button
             key={s.label}
@@ -838,19 +1034,19 @@ function StepNav({ current, onJump }: { current: number; onJump: (i: number) => 
             className={`flex shrink-0 items-center gap-2 rounded-lg border px-3 py-2 text-sm transition-colors ${
               active
                 ? 'border-primary bg-primary/10 font-medium text-foreground'
-                : done
-                  ? 'border-border bg-surface text-foreground hover:bg-muted'
+                : reached
+                  ? 'border-primary/40 bg-primary/5 text-foreground hover:bg-primary/10'
                   : 'border-border bg-surface text-muted-foreground hover:bg-muted'
             }`}
           >
             <span
               className={`grid size-5 shrink-0 place-items-center rounded-full text-[11px] ${
-                active
+                reached
                   ? 'bg-primary text-primary-foreground'
                   : 'bg-muted text-muted-foreground'
               }`}
             >
-              {i + 1}
+              {done ? <Check className="size-3" /> : i + 1}
             </span>
             <span className="hidden sm:inline">{s.label}</span>
           </button>

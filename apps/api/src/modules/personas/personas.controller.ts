@@ -16,7 +16,7 @@ import type { FastifyReply } from 'fastify';
 import { SystemMessage, HumanMessage } from '@langchain/core/messages';
 import { CurrentUser, type JwtPayload } from '../../core/auth/decorators/current-user.decorator';
 import { Permissions } from '../../core/auth/decorators/permissions.decorator';
-import { ValidationException } from '../../core/errors/domain.errors';
+import { ValidationException, ForbiddenException } from '../../core/errors/domain.errors';
 import { ModelFactoryService } from '../../core/llm/model-factory.service';
 import { LlmFlowLogger, previewText } from '../../core/llm/llm-flow.logger';
 import { PersonasService } from './personas.service';
@@ -27,6 +27,22 @@ import {
   EnhanceDtoSchema,
 } from './dto/persona.dto';
 
+/**
+ * The rendered `systemPrompt` (and version snapshots of it) is an internal
+ * artifact: it encodes the full persona instructions and must never reach a
+ * trainee or trainer over the API. Only a SUPER_ADMIN — the only role that
+ * configures personas — may see it. Strip it from every non-super-admin response.
+ */
+function stripSystemPrompt(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stripSystemPrompt);
+  if (value && typeof value === 'object') {
+    const { systemPrompt: _drop, ...rest } = value as Record<string, unknown>;
+    if (Array.isArray(rest.personas)) rest.personas = rest.personas.map(stripSystemPrompt);
+    return rest;
+  }
+  return value;
+}
+
 @Controller('personas')
 export class PersonasController {
   constructor(
@@ -35,9 +51,15 @@ export class PersonasController {
     private readonly flowLog: LlmFlowLogger,
   ) {}
 
+  /** Reveal systemPrompt only to a super admin; strip it for everyone else. */
+  private present<T>(payload: T, role: string): T {
+    return role === 'SUPER_ADMIN' ? payload : (stripSystemPrompt(payload) as T);
+  }
+
   @Get('my')
   async myPersonas(@CurrentUser() user: JwtPayload) {
-    return this.personasService.myPersonas({ sub: user.sub, role: user.role });
+    const res = await this.personasService.myPersonas({ sub: user.sub, role: user.role });
+    return this.present(res, user.role);
   }
 
   @Get()
@@ -45,13 +67,15 @@ export class PersonasController {
   async list(@Query() query: unknown, @CurrentUser() actor: JwtPayload) {
     const result = PersonaQueryDtoSchema.safeParse(query);
     if (!result.success) throw new ValidationException('Invalid query', result.error.issues);
-    return this.personasService.list(result.data, { sub: actor.sub, role: actor.role });
+    const res = await this.personasService.list(result.data, { sub: actor.sub, role: actor.role });
+    return this.present(res, actor.role);
   }
 
   @Get(':id/versions')
   @Permissions('personas:read')
   async getVersions(@Param('id', ParseIntPipe) id: number, @CurrentUser() actor: JwtPayload) {
-    return this.personasService.getVersions(id, { sub: actor.sub, role: actor.role });
+    const res = await this.personasService.getVersions(id, { sub: actor.sub, role: actor.role });
+    return this.present(res, actor.role);
   }
 
   @Get(':id/versions/:v')
@@ -61,13 +85,15 @@ export class PersonasController {
     @Param('v', ParseIntPipe) v: number,
     @CurrentUser() actor: JwtPayload,
   ) {
-    return this.personasService.getVersion(id, v, { sub: actor.sub, role: actor.role });
+    const res = await this.personasService.getVersion(id, v, { sub: actor.sub, role: actor.role });
+    return this.present(res, actor.role);
   }
 
   @Get(':id')
   @Permissions('personas:read')
   async findOne(@Param('id', ParseIntPipe) id: number, @CurrentUser() actor: JwtPayload) {
-    return this.personasService.findById(id, { sub: actor.sub, role: actor.role });
+    const res = await this.personasService.findById(id, { sub: actor.sub, role: actor.role });
+    return this.present(res, actor.role);
   }
 
   @Post()
@@ -75,19 +101,22 @@ export class PersonasController {
   async create(@Body() body: unknown, @CurrentUser() actor: JwtPayload) {
     const result = CreatePersonaDtoSchema.safeParse(body);
     if (!result.success) throw new ValidationException('Invalid persona payload', result.error.issues);
-    return this.personasService.create(result.data, actor.sub);
+    const res = await this.personasService.create(result.data, actor.sub);
+    return this.present(res, actor.role);
   }
 
   @Post(':id/publish')
   @Permissions('personas:write')
   async publish(@Param('id', ParseIntPipe) id: number, @CurrentUser() actor: JwtPayload) {
-    return this.personasService.publish(id, { sub: actor.sub, role: actor.role });
+    const res = await this.personasService.publish(id, { sub: actor.sub, role: actor.role });
+    return this.present(res, actor.role);
   }
 
   @Post(':id/unpublish')
   @Permissions('personas:write')
   async unpublish(@Param('id', ParseIntPipe) id: number, @CurrentUser() actor: JwtPayload) {
-    return this.personasService.unpublish(id, { sub: actor.sub, role: actor.role });
+    const res = await this.personasService.unpublish(id, { sub: actor.sub, role: actor.role });
+    return this.present(res, actor.role);
   }
 
   @Post(':id/enhance')
@@ -100,6 +129,12 @@ export class PersonasController {
   ) {
     const result = EnhanceDtoSchema.safeParse(body ?? {});
     if (!result.success) throw new ValidationException('Invalid enhance payload', result.error.issues);
+
+    // Enhancement operates on the rendered systemPrompt — a super-admin-only
+    // artifact. Restrict the endpoint so it can't leak prompt content to trainers.
+    if (actor.role !== 'SUPER_ADMIN') {
+      throw new ForbiddenException('Prompt enhancement is restricted to super admins');
+    }
 
     const persona = await this.personasService.findById(id, { sub: actor.sub, role: actor.role });
     const source = result.data.field === 'customInstructions'
@@ -169,7 +204,8 @@ export class PersonasController {
   ) {
     const result = UpdatePersonaDtoSchema.safeParse(body);
     if (!result.success) throw new ValidationException('Invalid persona payload', result.error.issues);
-    return this.personasService.update(id, result.data, { sub: actor.sub, role: actor.role });
+    const res = await this.personasService.update(id, result.data, { sub: actor.sub, role: actor.role });
+    return this.present(res, actor.role);
   }
 
   @Delete(':id')

@@ -4,6 +4,7 @@ import { CheckpointerService } from './checkpointer.service';
 import { ScoringService } from './scoring.service';
 import { UsageService } from './usage.service';
 import { LlmFlowLogger } from './llm-flow.logger';
+import { ProviderBudgetService } from './provider-budget.service';
 
 @Global()
 @Module({
@@ -13,6 +14,7 @@ import { LlmFlowLogger } from './llm-flow.logger';
     ScoringService,
     UsageService,
     LlmFlowLogger,
+    ProviderBudgetService,
   ],
   exports: [
     ModelFactoryService,
@@ -20,6 +22,7 @@ import { LlmFlowLogger } from './llm-flow.logger';
     ScoringService,
     UsageService,
     LlmFlowLogger,
+    ProviderBudgetService,
   ],
 })
 export class LlmModule {}

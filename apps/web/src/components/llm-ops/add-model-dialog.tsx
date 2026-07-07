@@ -10,6 +10,8 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { NumberField } from '@/components/ui/number-field'
 import {
   Select,
   SelectContent,
@@ -45,6 +47,11 @@ export function AddModelDialog({ open, onOpenChange }: AddModelDialogProps) {
   const [kind, setKind] = useState<ModelKind>('chat')
   const [masterModelId, setMasterModelId] = useState<number | null>(null)
   const [makePrimary, setMakePrimary] = useState(false)
+  // Custom-model fields (used when the provider has no master catalog).
+  const [customName, setCustomName] = useState('')
+  const [customContext, setCustomContext] = useState('')
+  const [customIn, setCustomIn] = useState('')
+  const [customOut, setCustomOut] = useState('')
 
   // Reset selection on the closed→open transition.
   const [wasOpen, setWasOpen] = useState(false)
@@ -54,6 +61,10 @@ export function AddModelDialog({ open, onOpenChange }: AddModelDialogProps) {
     setKind('chat')
     setMasterModelId(null)
     setMakePrimary(false)
+    setCustomName('')
+    setCustomContext('')
+    setCustomIn('')
+    setCustomOut('')
   } else if (!open && wasOpen) {
     setWasOpen(false)
   }
@@ -63,24 +74,35 @@ export function AddModelDialog({ open, onOpenChange }: AddModelDialogProps) {
     queryFn: listProviders,
     enabled: open,
   })
-  // Only master-linked providers can pick from a catalog.
-  const configurable = (providers.data ?? []).filter(
-    (p) => p.masterProviderId != null,
+  const selectedProvider = (providers.data ?? []).find(
+    (p) => String(p.id) === providerId,
   )
+  // A provider with no master catalog takes the custom-model path (chat only).
+  const isCustomProvider = selectedProvider != null && selectedProvider.masterProviderId == null
 
   const masterModels = useQuery({
     queryKey: llmKeys.masterModels(Number(providerId), kind),
     queryFn: () => listMasterModels(Number(providerId), kind),
-    enabled: open && providerId !== '',
+    enabled: open && providerId !== '' && !isCustomProvider,
   })
 
   const mutation = useMutation({
     mutationFn: () =>
-      createModel({
-        providerId: Number(providerId),
-        masterModelId: masterModelId!,
-        isDefault: makePrimary,
-      }),
+      isCustomProvider
+        ? createModel({
+            providerId: Number(providerId),
+            name: customName.trim(),
+            kind: 'chat', // custom voice models are unsupported (need a master catalog)
+            contextWindowTokens: customContext ? Number(customContext) : undefined,
+            inputPricePerMillion: customIn ? Number(customIn) : undefined,
+            outputPricePerMillion: customOut ? Number(customOut) : undefined,
+            isDefault: makePrimary,
+          })
+        : createModel({
+            providerId: Number(providerId),
+            masterModelId: masterModelId!,
+            isDefault: makePrimary,
+          }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: llmKeys.models() })
       notify.success('Model added')
@@ -88,6 +110,11 @@ export function AddModelDialog({ open, onOpenChange }: AddModelDialogProps) {
     },
     onError: (err) => notify.error(err),
   })
+
+  const submitDisabled =
+    mutation.isPending ||
+    providerId === '' ||
+    (isCustomProvider ? customName.trim() === '' : masterModelId === null)
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -116,6 +143,7 @@ export function AddModelDialog({ open, onOpenChange }: AddModelDialogProps) {
               onValueChange={(v) => {
                 setProviderId(v)
                 setMasterModelId(null)
+                setKind('chat')
               }}
             >
               <SelectTrigger>
@@ -124,16 +152,19 @@ export function AddModelDialog({ open, onOpenChange }: AddModelDialogProps) {
                 />
               </SelectTrigger>
               <SelectContent>
-                {configurable.map((p) => (
+                {(providers.data ?? []).map((p) => (
                   <SelectItem key={p.id} value={String(p.id)}>
-                    {p.name}
+                    <span>{p.name}</span>
+                    {p.masterProviderId == null && (
+                      <span className="ml-2 text-xs text-muted-foreground">custom</span>
+                    )}
                   </SelectItem>
                 ))}
               </SelectContent>
             </Select>
-            {providers.data && configurable.length === 0 && (
+            {providers.data && providers.data.length === 0 && (
               <span className="mt-1.5 block text-xs text-muted-foreground">
-                No catalog-linked providers yet — add one in the Providers tab first.
+                No providers yet — add one in the Providers tab first.
               </span>
             )}
           </label>
@@ -150,14 +181,68 @@ export function AddModelDialog({ open, onOpenChange }: AddModelDialogProps) {
                 <MessageSquare />
                 Chat
               </TabsTrigger>
-              <TabsTrigger value="voice" className="flex-1">
+              <TabsTrigger value="voice" className="flex-1" disabled={isCustomProvider}>
                 <Mic />
                 Voice
               </TabsTrigger>
             </TabsList>
           </Tabs>
+          {isCustomProvider && (
+            <p className="-mt-2 text-xs text-muted-foreground">
+              Custom providers support chat models only — voice needs a catalog entry.
+            </p>
+          )}
 
-          {providerId === '' ? (
+          {isCustomProvider ? (
+            <div className="grid gap-3">
+              <label className="block text-sm">
+                <span className="mb-2 block font-medium">Model ID</span>
+                <Input
+                  value={customName}
+                  onChange={(e) => setCustomName(e.target.value)}
+                  placeholder="e.g. llama-3.3-70b-instruct"
+                />
+                <span className="mt-1.5 block text-xs text-muted-foreground">
+                  The exact model id the provider's API expects.
+                </span>
+              </label>
+              <div className="grid grid-cols-3 gap-3">
+                <label className="block text-sm">
+                  <span className="mb-2 block font-medium">Context (tokens)</span>
+                  <NumberField
+                    value={customContext}
+                    onChange={setCustomContext}
+                    min={0}
+                    step={1000}
+                    placeholder="—"
+                    aria-label="Context window in tokens"
+                  />
+                </label>
+                <label className="block text-sm">
+                  <span className="mb-2 block font-medium">In $/1M</span>
+                  <NumberField
+                    value={customIn}
+                    onChange={setCustomIn}
+                    min={0}
+                    step={0.1}
+                    placeholder="—"
+                    aria-label="Input price per million tokens"
+                  />
+                </label>
+                <label className="block text-sm">
+                  <span className="mb-2 block font-medium">Out $/1M</span>
+                  <NumberField
+                    value={customOut}
+                    onChange={setCustomOut}
+                    min={0}
+                    step={0.1}
+                    placeholder="—"
+                    aria-label="Output price per million tokens"
+                  />
+                </label>
+              </div>
+            </div>
+          ) : providerId === '' ? (
             <p className="rounded-lg border border-border bg-muted/40 px-3 py-4 text-center text-sm text-muted-foreground">
               Select a provider to see its {kind} models.
             </p>
@@ -195,10 +280,7 @@ export function AddModelDialog({ open, onOpenChange }: AddModelDialogProps) {
           <Button variant="secondary" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-          <Button
-            onClick={() => mutation.mutate()}
-            disabled={mutation.isPending || masterModelId === null}
-          >
+          <Button onClick={() => mutation.mutate()} disabled={submitDisabled}>
             {mutation.isPending ? 'Adding…' : 'Add model'}
           </Button>
         </DialogFooter>

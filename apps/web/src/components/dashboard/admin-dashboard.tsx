@@ -6,6 +6,7 @@ import type { DateRange } from 'react-day-picker'
 import type { AdminSummary } from '@/services/dashboard'
 import { listUsage, llmKeys, type UsageKeySeriesPoint } from '@/services/llm'
 import { buttonVariants } from '@/components/ui/button'
+import { ErrorState } from '@/components/ui/error-state'
 import { cn } from '@/lib/utils'
 import { AreaChart, Area } from '@/components/charts/area-chart'
 import { Grid } from '@/components/charts/grid'
@@ -149,9 +150,7 @@ export function AdminDashboard({ data }: { data: AdminSummary }) {
         {usage.isPending ? (
           <div className="h-56 animate-pulse rounded-md bg-muted" />
         ) : usage.isError ? (
-          <p className="py-12 text-center text-sm text-destructive">
-            Couldn’t load usage.
-          </p>
+          <ErrorState title="Couldn’t load usage" onRetry={() => usage.refetch()} />
         ) : chartData.length === 0 ? (
           <p className="py-12 text-center text-sm text-muted-foreground">
             No LLM activity in this range.

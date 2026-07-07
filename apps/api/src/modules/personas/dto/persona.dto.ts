@@ -20,7 +20,7 @@ const LanguagesSchema = z.array(
 
 export const CreatePersonaDtoSchema = z.object({
   name: z.string().min(1).max(200),
-  description: z.string().optional(),
+  description: z.string().max(300).optional(),
   // Accent color for the persona's chat orb (#RRGGBB).
   color: HexColorSchema.optional(),
   isPublished: z.boolean().optional(),
@@ -40,7 +40,7 @@ export const CreatePersonaDtoSchema = z.object({
 
 export const UpdatePersonaDtoSchema = z.object({
   name: z.string().min(1).max(200).optional(),
-  description: z.string().optional(),
+  description: z.string().max(300).optional(),
   color: HexColorSchema.nullable().optional(),
   template: PersonaTemplateSchema.optional(),
   voiceStyleId: z.number().int().positive().nullable().optional(),
