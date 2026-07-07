@@ -2,6 +2,7 @@
   "name": "traineon",
   "version": "0.0.1",
   "private": true,
+  "packageManager": "npm@10.8.2",
   "workspaces": [
     "apps/*",
     "packages/*"
