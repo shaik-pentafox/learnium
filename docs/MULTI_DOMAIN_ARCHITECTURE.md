@@ -1,9 +1,19 @@
 # Multi-Domain Roleplay Architecture
 
-> Status: **PROPOSED — design review.**
+> Status: **PROPOSED — design review. Validated against source 2026-07-08**
+> (every file/symbol/line below verified against the tree on
+> `feature/persona-prompt-and-voice-cleanup`).
 > Goal: extend the persona/roleplay engine beyond `customer-support` to additional
 > verticals (**sales**, **hr**) without forking the codebase per vertical.
 > Supersedes the "customer-support only" scope in `PERSONA_TEMPLATE_PLAN.md`.
+
+> **Key validation finding:** support role framing is NOT confined to three
+> spots — it is baked into **~10 prompt blocks + the WS gateway + the scoring
+> feedback string + two web surfaces (session UI, mock handlers)**. The refactor's
+> real surface area is larger than a naive read suggests; the full hardcode
+> inventory is §10. The trainee **session UI** (`session/$uid.tsx`) is the one
+> consumer with *no* access to `templateData` — it needs domain roles delivered
+> through the session payload/contracts (§5, §10).
 
 ---
 
@@ -18,16 +28,26 @@ trainer fills fields ─► renderSystemPrompt(templateData) ─► SystemMessag
 
 The `domain` seam already exists but is **inert**:
 
-- `persona-prompt.template.ts` declares `ROLEPLAY_DOMAINS = ['customer-support']`
-  and `PersonaTemplateSchema.domain` (defaulted), but `renderSystemPrompt()`
-  **ignores `t.domain`** and always composes `CUSTOMER_SUPPORT_BLOCKS`.
-- The schema is a **flat customer-support shape** — `company`, `issue`,
-  `customerProfile` are required. These are meaningless for HR/Sales.
-- Runtime role framing is hardcoded to "customer / support agent" in three places:
-  `introBlock`, `guardrailBlock`/`reminderBlock` (template), and `voiceRoleLock`
-  (`chat.gateway.ts`).
+- `persona-prompt.template.ts:31` declares `ROLEPLAY_DOMAINS = ['customer-support'] as const`
+  and `PersonaTemplateSchema.domain = z.enum(ROLEPLAY_DOMAINS).default('customer-support')`
+  (`:35`), but `renderSystemPrompt()` (`:294`) **ignores `t.domain`** — it always
+  maps over `CUSTOMER_SUPPORT_BLOCKS` (`:273`).
+- The schema is a **flat customer-support shape** — `customerProfile` (`:46`),
+  `company` (`:49`), `issue` (`:52`) are required (`.min(1)`), alongside shared
+  requireds `emotion`/`intensity`/`desiredOutcome`/`resolutionCriteria`. The CS
+  situation fields are meaningless for HR/Sales.
+- Runtime role framing is hardcoded to "customer / support agent" across **~10
+  prompt blocks** (not three) — `introBlock`, `guardrailBlock`, `identityBlock`,
+  `situationBlock`, `emotionBlock`, `goalBlock`, `openingBlock`, `behaviourBlock`,
+  `endingBlock`, `reminderBlock` — **plus** `voiceRoleLock` (`chat.gateway.ts:243`)
+  **plus** `languageInstruction` ("even if the agent writes…", `chat.gateway.ts:258`)
+  **plus** the scoring unscorable-session feedback ("Engage with the customer…",
+  `scoring.service.ts:38`). Full inventory in §10.
 - The web builder (`persona-builder.tsx`) is worded entirely for support
-  ("The customer", "Company they contact", "Winning condition").
+  ("The customer" `:473`, "Company they contact" `:501`, "Winning condition"
+  `:657`/`:903`), and support framing also lives in the trainee **session UI**
+  (`session/$uid.tsx:167` "You are the support agent…") and the **mock renderer**
+  (`mocks/handlers.ts:127`).
 
 **Consequence:** every persona is a support customer. Adding a vertical is not a
 data change — it requires making `domain` actually drive schema, blocks, role
@@ -107,13 +127,27 @@ templateData reads — see migration (§7).
 
 ### 3.2 Blocks: per-domain composition
 
-Today `CUSTOMER_SUPPORT_BLOCKS` is a fixed array. Generalize to:
+Today `CUSTOMER_SUPPORT_BLOCKS` (`persona-prompt.template.ts:273`) is a fixed
+array of **12** blocks, in this exact order:
+
+```
+introBlock, guardrailBlock, identityBlock, situationBlock, emotionBlock,
+goalBlock, hiddenBlock, openingBlock, behaviourBlock, endingBlock,
+extraBlock, reminderBlock
+```
+
+Generalize to:
 
 - **Shared blocks** (domain-agnostic, parametrized by `modelRole`/`traineeRole`):
-  `guardrailBlock`, `identityBlock`, `emotionBlock`, `openingBlock`,
+  `guardrailBlock`, `identityBlock`, `emotionBlock`, `hiddenBlock`, `openingBlock`,
   `behaviourBlock`, `endingBlock`, `extraBlock`, `reminderBlock`.
+  ⚠ `identityBlock`, `emotionBlock`, `openingBlock`, `behaviourBlock`,
+  `endingBlock` currently carry CS wording ("the way a real customer would",
+  "that is the agent's job", "thank the agent") — they must be reworded to read
+  `domain.modelRole`/`domain.traineeRole`, not just moved.
 - **Per-domain blocks** (in the registry): `introBlock` (who you are / who the
-  trainee is), `situationBlock`, `goalBlock` framing.
+  trainee is), `situationBlock` (`# Why you are contacting support` today, `:183`),
+  `goalBlock` framing.
 
 `renderSystemPrompt` becomes:
 
@@ -131,16 +165,27 @@ Every hardcoded "customer"/"support agent" string in the shared blocks reads
 
 ### 3.3 Runtime role framing (gateway)
 
-`chat.gateway.ts::voiceRoleLock` hardcodes the support framing. It must take the
-domain (or the two role strings) and template the lock:
+`chat.gateway.ts::voiceRoleLock` (`:243`) hardcodes the support framing
+(`:247` `"You are ONLY the customer${name}. The human you are speaking with is
+the support agent."`). It must take the domain (or the two role strings) and
+template the lock:
 
 ```ts
 private voiceRoleLock(domain: RoleplayDomain, personaName?: string): string { ... }
 ```
 
-The gateway already parses `templateData` in `resolveSystemPrompt`; it gains
-access to `t.domain` there and threads it into the lock and the channel-style
-injection.
+**Nuance the doc must not gloss:**
+- `voiceRoleLock` is fed `wsClient.personaName` — the **Persona row's `name`**
+  (e.g. "Double-charged Dana"), *not* `templateData.customerName`. Keep that
+  source; only the role nouns come from the domain.
+- `resolveSystemPrompt` (`:232`) `safeParse`s `templateData` but **returns a
+  string and discards the parsed template** (falling back to the cached
+  `persona.systemPrompt` on parse failure, `:236`). Threading `t.domain` out to
+  the voice-lock/channel-style injection (`:593`) therefore needs a **signature
+  change** — either return `{ prompt, domain }` or resolve the domain separately
+  — not merely "gains access to `t.domain`".
+- `languageInstruction` (`:258`) also hardcodes "…even if the agent writes in a
+  different language" — same injection chain, must be parametrized too.
 
 ---
 
@@ -183,12 +228,43 @@ injection.
   domain (labels, placeholders, hints from the registry). Identity, emotion,
   difficulty, scoring, voice steps stay shared.
 - **Scoring step:** prefill `defaultCriteria` for the chosen domain (still editable).
-- Types in `web/services/personas.ts` mirror the discriminated union (there is no
-  contracts persona schema today — types live here; consider promoting to
-  `packages/contracts` so web + api share one source).
+- Types in `web/services/personas.ts` (`interface PersonaTemplate`, `:20`) mirror
+  the backend schema (there is no contracts persona schema today — confirmed:
+  `packages/contracts` only carries `personaName`/`personaColor`/`personaLanguages`
+  on the WS envelope, `realtime.ts:30`. Persona types live web-only). Consider
+  promoting to `packages/contracts` so web + api share one source.
+- **`buildTemplatePayload` + `OPTIONAL_TEMPLATE_KEYS`** (`services/personas.ts:169`,
+  `:184`) hard-read `customerProfile`/`company`/`issue`/`customerAge`/`customerName`/
+  `customerContact`/`accountRef` by name. A base rename (§7) or a discriminated
+  union touches this builder and its test (`tests/services/personas.test.ts:57`
+  asserts `templateData?.company`).
 
-The `LIMITS` map + `LimitedInput`/`LimitedTextarea` (just added) extend to the new
-fields; add their maxes to the base/per-domain schemas.
+The `LIMITS` map (`persona-builder.tsx:174`) + `LimitedInput`/`LimitedTextarea`
+(`:219`/`:238`) extend to the new fields; add their maxes to the base/per-domain
+schemas.
+
+### 5.1 Trainee session UI (the surface the design almost missed)
+
+The runtime **session screen** frames roles independently of the builder and has
+**no access to `templateData`** — only `session.personaName`:
+
+- `routes/_auth/session/$uid.tsx:167` — `"You are the support agent. ${personaName
+  ?? 'The customer'} will open the conversation…"`; `:396` "Waiting for the
+  customer to start…".
+- `features/roleplay/use-roleplay-session.ts:37` — comment "Ask the customer
+  (persona) to open" (cosmetic).
+
+To depersonalize this, the **session payload / contracts envelope must carry the
+domain (or the two role strings)** so the UI can render "You are the {traineeRole};
+the {modelRole} will open." This is a **contracts change**, not a builder change —
+the single most important item the original draft omitted.
+
+### 5.2 Mock renderer
+
+`apps/web/src/mocks/handlers.ts:127` `renderMockPrompt()` hardcodes "roleplaying as
+a CUSTOMER contacting a support agent", and `SEED_TEMPLATE`/`VOICE_TEMPLATE`
+(`:137`) are flat CS shapes. Update alongside the builder so mock-mode dev
+mirrors real multi-domain output.
 
 ---
 
@@ -196,16 +272,20 @@ fields; add their maxes to the base/per-domain schemas.
 
 | Area | File | Change |
 |---|---|---|
-| Schema/blocks | `core/llm/persona-prompt.template.ts` | Split base + discriminated union; registry-driven render; parametrize shared blocks by role. |
+| Schema/blocks | `core/llm/persona-prompt.template.ts` | Split base + discriminated union; registry-driven render; reword the 12 blocks (incl. `hiddenBlock`) to read `domain.modelRole`/`traineeRole`; fix CS leak in `CHANNEL_STYLE.chat` (`:107` "order ID or error code"). |
 | Registry | `core/llm/domains/*.ts` (new) | One module per domain: schema fragment, blocks, roles, default criteria, UI field meta. |
-| Gateway | `modules/realtime/chat.gateway.ts` | Domain-aware `voiceRoleLock` + channel-style; thread `t.domain`. |
-| DTO | `modules/personas/dto/persona.dto.ts` | Inherits union; add per-domain input limits; seed default criteria on create. |
-| Scoring | `core/llm/scoring.service.ts` | No engine change; optionally include domain in the evaluator preamble. |
-| Seed | `prisma/seed.ts` | Add example sales + hr personas. |
+| Gateway | `modules/realtime/chat.gateway.ts` | Domain-aware `voiceRoleLock` (`:243`) + `languageInstruction` (`:258`); **change `resolveSystemPrompt` signature** to surface the parsed domain (`:232`); thread into the `:593` injection. |
+| Render callers | `modules/personas/personas.service.ts` | `renderSystemPrompt(dto.template)` on **create (`:233`) + update (`:293`)** — re-renders the cached `systemPrompt`; the natural home for "seed default criteria on create" (not the DTO). |
+| DTO | `modules/personas/dto/persona.dto.ts` | Inherits union; add per-domain input limits. |
+| Scoring | `core/llm/scoring.service.ts` | No engine change, but parametrize the hardcoded "Engage with the **customer**…" unscorable-session feedback (`:38`); optionally add domain to the evaluator preamble. |
+| Seed | `prisma/seed.ts` | Seeds are flat CS templates with **no `domain` key** (`:29`+, legacy names) — they parse via the default; add example sales + hr personas, and keep folding legacy names if §7 option 2 lands. |
 | Web builder | `components/personas/persona-builder.tsx` | Domain picker + domain-driven situation step + default criteria. |
-| Web types | `services/personas.ts` (+ maybe `packages/contracts`) | Discriminated `PersonaTemplate`; neutral shared field names. |
+| Web session UI | `routes/_auth/session/$uid.tsx`, `features/roleplay/use-roleplay-session.ts` | Consume domain roles from the session payload (needs contracts change — §5.1). |
+| Web mock | `mocks/handlers.ts` | `renderMockPrompt` + `SEED_TEMPLATE`/`VOICE_TEMPLATE` domain-aware (`:127`/`:137`). |
+| Web types + payload | `services/personas.ts` (+ maybe `packages/contracts`) | Discriminated `PersonaTemplate` (`:20`); update `buildTemplatePayload`/`OPTIONAL_TEMPLATE_KEYS` (`:184`/`:169`); neutral shared field names. |
+| Contracts | `packages/contracts/src/realtime.ts` | Add `domain`/role strings to the session/WS envelope so the session UI can depersonalize (§5.1). |
 | Docs | `PERSONA_PROMPT_ARCHITECTURE.md`, `PERSONA_TEMPLATE_PLAN.md` | Update to multi-domain; link this doc. |
-| Tests | `persona-prompt.template.spec.ts`, builder test | Per-domain render + schema validation. |
+| Tests | `persona-prompt.template.spec.ts`, `tests/components/persona-builder.test.tsx`, `tests/services/personas.test.ts` | Per-domain render + schema validation; the personas.test asserts `templateData?.company` (`:57`) — update for the union. |
 
 ---
 
@@ -253,3 +333,59 @@ Each phase is independently mergeable; CS is never broken.
    web+api source of truth) as part of this, or keep the current web-only mirror?
 5. **Scoring defaults:** seed `defaultCriteria` on persona create, or only surface
    as UI suggestions? Recommend seed-on-create, editable.
+
+---
+
+## 10. Complete role-framing hardcode inventory (validated 2026-07-08)
+
+Every place "customer" / "support agent" framing is baked in today. Each must
+read `domain.modelRole` / `domain.traineeRole` (or be delivered domain via
+payload) before a non-support persona reads correctly. This is the checklist the
+build plan (§8) closes against — nothing here may remain a literal.
+
+### Backend — prompt template (`core/llm/persona-prompt.template.ts`)
+| Block / const | Line | Hardcoded string (abbrev.) |
+|---|---|---|
+| `introBlock` | 130 | "roleplaying as a CUSTOMER … SUPPORT AGENT IN TRAINING" |
+| `guardrailBlock` | 141 | "support agent", "Stay the customer" |
+| `identityBlock` | 175 | "the way a real customer would" |
+| `situationBlock` | 183 | heading "# Why you are contacting support" |
+| `emotionBlock` | 195 | agent-empathy dynamics |
+| `goalBlock` | 206 | "the agent clearly … explains" |
+| `hiddenBlock` | 210 | "# Information you hold back" (wording neutral-ish; verify) |
+| `openingBlock` | 225 | "the way a real customer would" |
+| `behaviourBlock` | 238 | "that is the agent's job" |
+| `endingBlock` | 246 | "thank the agent" |
+| `reminderBlock` | 261 | "you are the customer … support agent" |
+| `CHANNEL_STYLE.chat` | 107 | "order ID or error code" (CS-flavored) |
+
+### Backend — gateway (`modules/realtime/chat.gateway.ts`)
+| Site | Line | Note |
+|---|---|---|
+| `voiceRoleLock` | 243/247 | "You are ONLY the customer … the support agent" |
+| `languageInstruction` | 258 | "even if the agent writes …" |
+| `resolveSystemPrompt` | 232 | parses `templateData` but discards it → **signature change** needed |
+| injection site | 593 | `channelStyleBlock('audio') + languageInstruction + voiceRoleLock` |
+
+### Backend — scoring (`core/llm/scoring.service.ts`)
+| Site | Line | Note |
+|---|---|---|
+| unscorable-session feedback | 38 | "…Engage with the **customer** to earn a score." |
+
+### Frontend
+| Site | Line | Note |
+|---|---|---|
+| `persona-builder.tsx` | 428/473/501/657/903 | "The customer", "Company they contact", "Winning condition" |
+| `session/$uid.tsx` | 167/396 | "You are the support agent…", "Waiting for the customer…" — **no `templateData` access → needs domain via session payload (§5.1)** |
+| `use-roleplay-session.ts` | 37 | comment "Ask the customer (persona) to open" (cosmetic) |
+| `mocks/handlers.ts` | 127/137 | `renderMockPrompt` + `SEED_TEMPLATE`/`VOICE_TEMPLATE` flat CS |
+| `services/personas.ts` | 169/184 | `OPTIONAL_TEMPLATE_KEYS` + `buildTemplatePayload` read CS names |
+
+### Non-consumers (safe — shared fields only)
+- `routes/_auth/personas/index.tsx:177` reads `templateData?.channels` (shared).
+- `voiceRoleLock` reads `Persona.name`, not `templateData.customerName` — leave that source.
+
+> **Definition of done for framing:** grep the repo for `\bcustomer\b`,
+> `support agent`, and `the agent` and confirm every hit is either (a) reading a
+> domain role string, (b) inside the `customer-support` registry entry, or (c) an
+> intentional user-facing CS label. Zero literal role nouns in shared code paths.

@@ -33,10 +33,49 @@ const MASTER_MODEL_SELECT = {
   key: true,
   name: true,
   kind: true,
+  contextWindowTokens: true,
+  pricingUnit: true,
+  inputPricePerMillion: true,
+  outputPricePerMillion: true,
+  inputPricePerMinute: true,
+  outputPricePerMinute: true,
   voicePipeline: true,
   languages: true,
   voices: true,
 } satisfies Prisma.MasterModelSelect;
+
+/** Effective pricing/context for a configured model = its own override, else the
+ *  linked master's value (voice metadata already resolves this way). Keeps API
+ *  responses stable now that master-linked rows store NULL for inherited fields. */
+function resolveModel<
+  T extends {
+    contextWindowTokens: number | null;
+    pricingUnit: string | null;
+    inputPricePerMillion: number | null;
+    outputPricePerMillion: number | null;
+    inputPricePerMinute: number | null;
+    outputPricePerMinute: number | null;
+    masterModel?: {
+      contextWindowTokens: number | null;
+      pricingUnit: string | null;
+      inputPricePerMillion: number | null;
+      outputPricePerMillion: number | null;
+      inputPricePerMinute: number | null;
+      outputPricePerMinute: number | null;
+    } | null;
+  },
+>(row: T): T {
+  const m = row.masterModel ?? null;
+  return {
+    ...row,
+    contextWindowTokens: row.contextWindowTokens ?? m?.contextWindowTokens ?? null,
+    pricingUnit: row.pricingUnit ?? m?.pricingUnit ?? 'token',
+    inputPricePerMillion: row.inputPricePerMillion ?? m?.inputPricePerMillion ?? null,
+    outputPricePerMillion: row.outputPricePerMillion ?? m?.outputPricePerMillion ?? null,
+    inputPricePerMinute: row.inputPricePerMinute ?? m?.inputPricePerMinute ?? null,
+    outputPricePerMinute: row.outputPricePerMinute ?? m?.outputPricePerMinute ?? null,
+  };
+}
 
 /** Masked key for display: "sk-…abc4". Never enough to reconstruct the key. */
 function credentialHint(apiKey: string): string {
@@ -257,8 +296,8 @@ export class LlmOpsService {
 
   // ── Models ──────────────────────────────────────────────────────────────────
 
-  listModels(query: ModelQueryDto) {
-    return this.prisma.llmModel.findMany({
+  async listModels(query: ModelQueryDto) {
+    const rows = await this.prisma.llmModel.findMany({
       where: {
         ...(query.providerId !== undefined ? { providerId: query.providerId } : {}),
         ...(query.capability !== undefined ? { capabilities: { has: query.capability } } : {}),
@@ -270,6 +309,7 @@ export class LlmOpsService {
       },
       orderBy: [{ kind: 'asc' }, { name: 'asc' }],
     });
+    return rows.map(resolveModel);
   }
 
   /** Register a model by picking from the provider's master catalog. Metadata is
@@ -283,9 +323,14 @@ export class LlmOpsService {
     let kind: string;
     let capabilities: string[];
     let masterModelId: number | null;
+    // Pricing/context are OVERRIDES: null on a master-linked row inherits from
+    // the catalog at read/cost time. Only custom rows populate them.
     let contextWindowTokens: number | null;
+    let pricingUnit: string | null;
     let inputPricePerMillion: number | null;
     let outputPricePerMillion: number | null;
+    let inputPricePerMinute: number | null;
+    let outputPricePerMinute: number | null;
 
     if (dto.masterModelId != null) {
       const master = await this.prisma.masterModel.findUnique({
@@ -301,9 +346,13 @@ export class LlmOpsService {
       kind = master.kind;
       capabilities = master.kind === 'voice' ? ['voice'] : ['conversation', 'scoring'];
       masterModelId = master.id;
-      contextWindowTokens = master.contextWindowTokens;
-      inputPricePerMillion = master.inputPricePerMillion;
-      outputPricePerMillion = master.outputPricePerMillion;
+      // Inherit from the master — store nothing to drift.
+      contextWindowTokens = null;
+      pricingUnit = null;
+      inputPricePerMillion = null;
+      outputPricePerMillion = null;
+      inputPricePerMinute = null;
+      outputPricePerMinute = null;
     } else {
       // Custom model — voice is unsupported: the voice factory reads languages +
       // voices from the master catalog, which a custom row has none of.
@@ -317,8 +366,11 @@ export class LlmOpsService {
       capabilities = dto.capabilities ?? ['conversation', 'scoring'];
       masterModelId = null;
       contextWindowTokens = dto.contextWindowTokens ?? null;
+      pricingUnit = 'token'; // custom models are chat-only → token-billed
       inputPricePerMillion = dto.inputPricePerMillion ?? null;
       outputPricePerMillion = dto.outputPricePerMillion ?? null;
+      inputPricePerMinute = null;
+      outputPricePerMinute = null;
     }
 
     // Auto-primary: first model of its kind claims the default slot.
@@ -335,8 +387,11 @@ export class LlmOpsService {
           capabilities,
           isDefault: asDefault,
           contextWindowTokens,
+          pricingUnit,
           inputPricePerMillion,
           outputPricePerMillion,
+          inputPricePerMinute,
+          outputPricePerMinute,
         },
         include: { masterModel: { select: MASTER_MODEL_SELECT } },
       });
@@ -361,7 +416,7 @@ export class LlmOpsService {
       }
     }
     await this.invalidateModelCache();
-    return model;
+    return resolveModel(model);
   }
 
   async updateModel(id: number, dto: UpdateModelDto) {
@@ -374,13 +429,20 @@ export class LlmOpsService {
     if ('inputPricePerMillion' in dto) data.inputPricePerMillion = dto.inputPricePerMillion ?? null;
     if ('outputPricePerMillion' in dto) data.outputPricePerMillion = dto.outputPricePerMillion ?? null;
 
-    const update = this.prisma.llmModel.update({ where: { id }, data });
+    const update = this.prisma.llmModel.update({
+      where: { id },
+      data,
+      include: {
+        provider: { select: { id: true, name: true, type: true } },
+        masterModel: { select: MASTER_MODEL_SELECT },
+      },
+    });
     // Promoting via edit must demote the other same-kind rows (excluding this one).
     const [, model] = dto.isDefault === true
       ? await this.prisma.$transaction([this.clearDefaults(existing.kind, id), update])
       : [null, await update];
     await this.invalidateModelCache();
-    return model;
+    return resolveModel(model);
   }
 
   /** Demote every default model OF A KIND, optionally excluding one id. */

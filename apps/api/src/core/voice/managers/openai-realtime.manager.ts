@@ -13,6 +13,11 @@ const CLIENT_SAMPLE_RATE = 16000;
  *  first-audio start, big enough that the client isn't decoding confetti. */
 const AUDIO_FLUSH_BYTES = OPENAI_SAMPLE_RATE / 2; // 12000 bytes = 0.25s pcm16 mono
 
+// pcm16 mono bytes-per-ms = rate * 2 / 1000. Used to turn audio byte counts into
+// durations for per-minute voice cost accounting.
+const OUTPUT_BYTES_PER_MS = (OPENAI_SAMPLE_RATE * 2) / 1000; // 48 @ 24kHz
+const INPUT_BYTES_PER_MS = (CLIENT_SAMPLE_RATE * 2) / 1000; // 32 @ 16kHz
+
 const END_SENTINEL = '[CONVERSATION_ENDED]';
 
 /**
@@ -60,6 +65,9 @@ export class OpenAIRealtimeManager implements IVoiceManager {
    *  cause of progressive voice degradation (deeper/slower each turn). */
   private currentItemId: string | null = null;
   private sentAudioBytes = 0;
+  /** Client mic bytes received since the last response settled — the input-audio
+   *  duration for this turn (per-minute STT cost). */
+  private inputAudioBytes = 0;
   /** Normalized word sets of the last assistant replies — used to reject
    *  transcripts that are mostly the agent's own voice echoed into the mic
    *  (the "model answers itself as the agent" failure on barge-in). */
@@ -147,6 +155,7 @@ export class OpenAIRealtimeManager implements IVoiceManager {
 
   pushAudio(buf: Buffer): void {
     if (this.ws?.readyState !== WebSocket.OPEN) return;
+    this.inputAudioBytes += buf.length;
     const upsampled = resamplePcm16(buf, CLIENT_SAMPLE_RATE, OPENAI_SAMPLE_RATE);
     this.send({
       type: 'input_audio_buffer.append',
@@ -295,8 +304,11 @@ export class OpenAIRealtimeManager implements IVoiceManager {
             inputTokens: usage.input_tokens ?? 0,
             outputTokens: usage.output_tokens ?? 0,
             latencyMs,
+            inputAudioMs: Math.round(this.inputAudioBytes / INPUT_BYTES_PER_MS),
+            outputAudioMs: Math.round(this.sentAudioBytes / OUTPUT_BYTES_PER_MS),
           });
         }
+        this.inputAudioBytes = 0;
         this.resetResponseState();
         if (this.ended) {
           this.opts.callbacks.onConversationEnded();

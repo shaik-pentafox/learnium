@@ -12,8 +12,13 @@
  *
  *   npm run seed:llm   (from apps/api)
  *
- * Pricing / context windows pulled from provider docs (Jul 2026); chat prices
- * are per 1M text tokens, voice prices per 1M audio tokens.
+ * Pricing / context windows pulled from provider docs (Jul 2026). Pricing basis
+ * depends on the model (`pricingUnit`):
+ *   - 'token'  — chat + native S2S voice (OpenAI Realtime, Gemini Live), which
+ *                vendors bill per 1M tokens (audio tokens for voice). Use the
+ *                *PricePerMillion fields.
+ *   - 'minute' — duration-billed voice (Whisper STT, per-minute TTS,
+ *                Deepgram/ElevenLabs-style). Use the *PricePerMinute fields.
  */
 import { PrismaClient } from '@prisma/client';
 
@@ -34,8 +39,12 @@ interface SeedMasterModel {
   name: string; // display
   kind: 'chat' | 'voice';
   contextWindowTokens?: number;
+  /** Pricing basis. Defaults to 'token'; set 'minute' for duration-billed voice. */
+  pricingUnit?: 'token' | 'minute';
   inputPricePerMillion?: number;
   outputPricePerMillion?: number;
+  inputPricePerMinute?: number;
+  outputPricePerMinute?: number;
   voicePipeline?: 's2s' | 'stt+tts';
   languages?: string[];
   voices?: string[];
@@ -235,8 +244,11 @@ async function main() {
       name: m.name,
       kind: m.kind,
       contextWindowTokens: m.contextWindowTokens ?? null,
+      pricingUnit: m.pricingUnit ?? 'token',
       inputPricePerMillion: m.inputPricePerMillion ?? null,
       outputPricePerMillion: m.outputPricePerMillion ?? null,
+      inputPricePerMinute: m.inputPricePerMinute ?? null,
+      outputPricePerMinute: m.outputPricePerMinute ?? null,
       voicePipeline: m.voicePipeline ?? null,
       languages: m.languages ?? [],
       voices: m.voices ?? [],
@@ -320,32 +332,32 @@ async function main() {
     }
   }
 
-  // 3. Refresh IO pricing + context window on configured models from their
-  //    linked master, so a catalog price change propagates on reseed instead of
-  //    leaving configured rows (and cost telemetry) on stale numbers.
-  let refreshedModels = 0;
-  const configuredWithMaster = await prisma.llmModel.findMany({
-    where: { masterModelId: { not: null } },
-    include: { masterModel: true },
+  // 3. Normalize any legacy copies: master-linked configured rows inherit
+  //    pricing/context from the catalog now (override ?? master at read time),
+  //    so a lingering copied value would shadow a catalog price change. Null the
+  //    copies out — the migration does this once; this keeps reseeds idempotent
+  //    for rows relinked after the migration (step 2 backfill).
+  const { count: normalizedModels } = await prisma.llmModel.updateMany({
+    where: {
+      masterModelId: { not: null },
+      OR: [
+        { pricingUnit: { not: null } },
+        { inputPricePerMillion: { not: null } },
+        { outputPricePerMillion: { not: null } },
+        { inputPricePerMinute: { not: null } },
+        { outputPricePerMinute: { not: null } },
+        { contextWindowTokens: { not: null } },
+      ],
+    },
+    data: {
+      pricingUnit: null,
+      inputPricePerMillion: null,
+      outputPricePerMillion: null,
+      inputPricePerMinute: null,
+      outputPricePerMinute: null,
+      contextWindowTokens: null,
+    },
   });
-  for (const lm of configuredWithMaster) {
-    const mm = lm.masterModel;
-    if (!mm) continue;
-    const drifted =
-      lm.inputPricePerMillion !== mm.inputPricePerMillion ||
-      lm.outputPricePerMillion !== mm.outputPricePerMillion ||
-      lm.contextWindowTokens !== mm.contextWindowTokens;
-    if (!drifted) continue;
-    await prisma.llmModel.update({
-      where: { id: lm.id },
-      data: {
-        inputPricePerMillion: mm.inputPricePerMillion,
-        outputPricePerMillion: mm.outputPricePerMillion,
-        contextWindowTokens: mm.contextWindowTokens,
-      },
-    });
-    refreshedModels++;
-  }
 
   const chatCount = MASTER_MODELS.filter((m) => m.kind === 'chat').length;
   const voiceCount = MASTER_MODELS.filter((m) => m.kind === 'voice').length;
@@ -354,7 +366,7 @@ async function main() {
   console.log(`  Chat models  : ${chatCount}, Voice models: ${voiceCount}`);
   console.log(`  Pruned       : ${prunedModels} stale model(s), ${prunedProviders} stale provider(s)`);
   console.log(`  Backfilled   : ${linkedProviders} provider(s), ${linkedModels} model(s) linked to masters`);
-  console.log(`  IO refreshed : ${refreshedModels} configured model(s) synced to master pricing`);
+  console.log(`  Normalized   : ${normalizedModels} configured model(s) now inherit pricing from master`);
 }
 
 main()

@@ -10,6 +10,11 @@ const CLIENT_SAMPLE_RATE = 16000;
 /** Batch outbound audio to ~500ms per WAV frame. */
 const AUDIO_FLUSH_BYTES = GEMINI_OUTPUT_RATE; // 24000 bytes = 0.5s pcm16 mono
 
+// pcm16 mono bytes-per-ms = rate * 2 / 1000 — audio byte counts → durations for
+// per-minute voice cost accounting.
+const OUTPUT_BYTES_PER_MS = (GEMINI_OUTPUT_RATE * 2) / 1000; // 48 @ 24kHz
+const INPUT_BYTES_PER_MS = (CLIENT_SAMPLE_RATE * 2) / 1000; // 32 @ 16kHz
+
 const END_SENTINEL = '[CONVERSATION_ENDED]';
 
 /** Minimal structural view of the SDK live session (avoids version-tight types). */
@@ -48,6 +53,9 @@ export class GeminiLiveManager implements IVoiceManager {
   private audioChunks: Buffer[] = [];
   private audioBuffered = 0;
   private ttsSeq = 0;
+  /** Per-turn audio byte totals for per-minute voice cost (reset on turnComplete). */
+  private inputAudioBytes = 0;
+  private outputAudioBytes = 0;
 
   private userText = '';
   private assistantText = '';
@@ -91,6 +99,7 @@ export class GeminiLiveManager implements IVoiceManager {
   }
 
   pushAudio(buf: Buffer): void {
+    this.inputAudioBytes += buf.length;
     this.session?.sendRealtimeInput({
       audio: {
         data: buf.toString('base64'),
@@ -163,6 +172,7 @@ export class GeminiLiveManager implements IVoiceManager {
       const chunk = Buffer.from(b64, 'base64');
       this.audioChunks.push(chunk);
       this.audioBuffered += chunk.length;
+      this.outputAudioBytes += chunk.length;
       if (this.audioBuffered >= AUDIO_FLUSH_BYTES) this.flushAudio();
     }
 
@@ -190,10 +200,14 @@ export class GeminiLiveManager implements IVoiceManager {
           inputTokens: usage.promptTokenCount ?? 0,
           outputTokens: usage.responseTokenCount ?? 0,
           latencyMs,
+          inputAudioMs: Math.round(this.inputAudioBytes / INPUT_BYTES_PER_MS),
+          outputAudioMs: Math.round(this.outputAudioBytes / OUTPUT_BYTES_PER_MS),
         });
       }
       this.userText = '';
       this.assistantText = '';
+      this.inputAudioBytes = 0;
+      this.outputAudioBytes = 0;
       this.responseStartedAt = 0;
       this.cancelling = false;
       if (ended) this.opts.callbacks.onConversationEnded();

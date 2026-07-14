@@ -19,11 +19,17 @@ export interface RecordUsageInput {
   userId?: number | null;
   inputTokens: number;
   outputTokens: number;
+  /** Audio duration for per-minute-billed voice models (unit='minute'). Ignored
+   *  for token-billed models. Input = mic/STT audio, output = TTS audio. */
+  inputAudioSeconds?: number | undefined;
+  outputAudioSeconds?: number | undefined;
   estimated: boolean;
   /** Usage from a persona test/simulation session — excluded from cost analytics. */
   isSimulation?: boolean;
   latencyMs?: number;
 }
+
+const SECONDS_PER_MINUTE = 60;
 
 // Rough fallback when the provider returns no usage_metadata (~4 chars/token).
 const CHARS_PER_TOKEN = 4;
@@ -65,11 +71,7 @@ export class UsageService {
   /** Persist one usage row. Never throws — telemetry must not break a turn. */
   async record(input: RecordUsageInput): Promise<void> {
     try {
-      const costUsd = await this.computeCost(
-        input.modelId,
-        input.inputTokens,
-        input.outputTokens,
-      );
+      const costUsd = await this.computeCost(input);
       await this.prisma.llmUsage.create({
         data: {
           kind: input.kind,
@@ -92,20 +94,48 @@ export class UsageService {
     }
   }
 
-  private async computeCost(
-    modelId: number | null | undefined,
-    inputTokens: number,
-    outputTokens: number,
-  ): Promise<number> {
-    if (!modelId) return 0;
+  private async computeCost(input: RecordUsageInput): Promise<number> {
+    if (!input.modelId) return 0;
     const model = await this.prisma.llmModel.findUnique({
-      where: { id: modelId },
-      select: { inputPricePerMillion: true, outputPricePerMillion: true },
+      where: { id: input.modelId },
+      select: {
+        pricingUnit: true,
+        inputPricePerMillion: true,
+        outputPricePerMillion: true,
+        inputPricePerMinute: true,
+        outputPricePerMinute: true,
+        // Master-linked rows store NULL and inherit pricing from the catalog.
+        masterModel: {
+          select: {
+            pricingUnit: true,
+            inputPricePerMillion: true,
+            outputPricePerMillion: true,
+            inputPricePerMinute: true,
+            outputPricePerMinute: true,
+          },
+        },
+      },
     });
     if (!model) return 0;
-    const inCost = ((model.inputPricePerMillion ?? 0) * inputTokens) / 1_000_000;
-    const outCost =
-      ((model.outputPricePerMillion ?? 0) * outputTokens) / 1_000_000;
+
+    // Effective pricing = own override, else the linked master's value.
+    const m = model.masterModel;
+    const pricingUnit = model.pricingUnit ?? m?.pricingUnit ?? 'token';
+    const inPerMillion = model.inputPricePerMillion ?? m?.inputPricePerMillion ?? 0;
+    const outPerMillion = model.outputPricePerMillion ?? m?.outputPricePerMillion ?? 0;
+    const inPerMinute = model.inputPricePerMinute ?? m?.inputPricePerMinute ?? 0;
+    const outPerMinute = model.outputPricePerMinute ?? m?.outputPricePerMinute ?? 0;
+
+    // Per-minute voice (STT/TTS/duration-billed): price against audio seconds.
+    if (pricingUnit === 'minute') {
+      const inMin = (input.inputAudioSeconds ?? 0) / SECONDS_PER_MINUTE;
+      const outMin = (input.outputAudioSeconds ?? 0) / SECONDS_PER_MINUTE;
+      return Number((inPerMinute * inMin + outPerMinute * outMin).toFixed(6));
+    }
+
+    // Per-token (chat + native S2S voice, billed per 1M audio tokens).
+    const inCost = (inPerMillion * input.inputTokens) / 1_000_000;
+    const outCost = (outPerMillion * input.outputTokens) / 1_000_000;
     return Number((inCost + outCost).toFixed(6));
   }
 

@@ -677,7 +677,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       onConversationEnded: () => {
         void this.endSession(client);
       },
-      onUsage: ({ inputTokens, outputTokens, latencyMs }) => {
+      onUsage: ({ inputTokens, outputTokens, latencyMs, inputAudioMs, outputAudioMs }) => {
         void this.usage.record({
           kind: 'voice',
           modelId: resolved.modelId,
@@ -687,6 +687,8 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
           userId: wsClient.userId,
           inputTokens,
           outputTokens,
+          inputAudioSeconds: inputAudioMs != null ? inputAudioMs / 1000 : undefined,
+          outputAudioSeconds: outputAudioMs != null ? outputAudioMs / 1000 : undefined,
           estimated: false,
           isSimulation: wsClient.isSimulation ?? false,
           latencyMs,

@@ -36,8 +36,16 @@ export interface S2SCallbacks {
   onAssistantTranscript(text: string, latencyMs: number): void;
   /** The model emitted the end-of-conversation sentinel — trigger scoring. */
   onConversationEnded(): void;
-  /** Provider-reported audio token usage for one response. */
-  onUsage(usage: { inputTokens: number; outputTokens: number; latencyMs: number }): void;
+  /** Provider-reported usage for one response. `inputAudioMs`/`outputAudioMs`
+   *  are the measured audio durations — only used to cost per-minute-billed
+   *  voice models; token-billed models ignore them. */
+  onUsage(usage: {
+    inputTokens: number;
+    outputTokens: number;
+    latencyMs: number;
+    inputAudioMs?: number;
+    outputAudioMs?: number;
+  }): void;
   /** Fatal upstream error — surface to the client and stop the voice session. */
   onError(code: string, message: string): void;
 }

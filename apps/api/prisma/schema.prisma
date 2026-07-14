@@ -126,8 +126,14 @@ model MasterModel {
   name                  String // display
   kind                  String // 'chat' | 'voice'
   contextWindowTokens   Int? // chat
-  inputPricePerMillion  Float? // chat
-  outputPricePerMillion Float? // chat
+  // Pricing basis. 'token' → per-1M-token fields below (chat + native S2S voice,
+  // which vendors bill per audio token). 'minute' → per-audio-minute fields
+  // (STT like Whisper, per-minute TTS, Deepgram/ElevenLabs-style voice).
+  pricingUnit           String  @default("token") // 'token' | 'minute'
+  inputPricePerMillion  Float? // unit=token: USD per 1M input tokens
+  outputPricePerMillion Float? // unit=token: USD per 1M output tokens
+  inputPricePerMinute   Float? // unit=minute: USD per minute of input audio (STT)
+  outputPricePerMinute  Float? // unit=minute: USD per minute of output audio (TTS)
   voicePipeline         String? // voice: 's2s' | 'stt+tts'
   languages             String[] // voice: BCP-47 codes
   voices                String[] // voice: provider voice ids
@@ -166,12 +172,20 @@ model LlmModel {
   // primary chat model AND one primary voice model (may be different providers).
   kind                  String       @default("chat")
   capabilities          String[]
+  // Pricing / context are OVERRIDES: null on a master-linked row means "inherit
+  // from masterModel" (resolved override ?? master at read/cost time — the same
+  // pattern voicePipeline/languages/voices already use). Only custom rows
+  // (masterModelId = null) populate these; the catalog is the single source of
+  // truth for linked rows, so there is no copy to drift.
   contextWindowTokens   Int?
+  pricingUnit           String?      // null = inherit; else 'token' | 'minute'
   inputPricePerMillion  Float?
   outputPricePerMillion Float?
+  inputPricePerMinute   Float?
+  outputPricePerMinute  Float?
   isDefault             Boolean      @default(false)
-  // Master catalog link. Null = legacy row; voice metadata (pipeline, languages,
-  // voices) is always read from the master at runtime.
+  // Master catalog link. Null = legacy/custom row; when set, pricing/context and
+  // voice metadata (pipeline, languages, voices) are read from the master.
   masterModelId         Int?
   masterModel           MasterModel? @relation(fields: [masterModelId], references: [id])
   createdAt             DateTime     @default(now())

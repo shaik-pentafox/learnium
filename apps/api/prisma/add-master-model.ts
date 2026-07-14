@@ -15,8 +15,14 @@
  *   npm run model:add -- --provider openai --kind chat \
  *     --key gpt-5-mini --name "GPT-5 Mini" --ctx 400000 --in 0.25 --out 2
  *
+ *   # Per-minute voice model (STT/TTS billed by audio duration)
+ *   npm run model:add -- --provider openai --kind voice --pipeline stt+tts \
+ *     --key whisper-1 --name "Whisper" --unit minute --in-min 0.006
+ *
  * --provider is the master provider KEY: openai | google | anthropic.
- * --in/--out are $ per 1M tokens (text tokens for chat, audio tokens for voice).
+ * --unit is token (default) | minute. token → --in/--out ($ per 1M tokens,
+ * text for chat, audio for native S2S voice). minute → --in-min/--out-min
+ * ($ per minute of input/output audio).
  * After adding, the model appears in LLM Ops → Add model for any configured
  * provider of that master.
  */
@@ -35,8 +41,11 @@ const { values } = parseArgs({
     languages: { type: 'string' }, // voice: comma-separated BCP-47
     voices: { type: 'string' }, // voice: comma-separated voice ids
     ctx: { type: 'string' }, // chat: context window tokens
-    in: { type: 'string' }, // $/1M input
-    out: { type: 'string' }, // $/1M output
+    unit: { type: 'string' }, // pricing basis: token (default) | minute
+    in: { type: 'string' }, // $/1M input tokens (unit=token)
+    out: { type: 'string' }, // $/1M output tokens (unit=token)
+    'in-min': { type: 'string' }, // $/min input audio (unit=minute)
+    'out-min': { type: 'string' }, // $/min output audio (unit=minute)
   },
 });
 
@@ -56,6 +65,8 @@ async function main() {
   const name = values.name ?? key;
   if (kind !== 'chat' && kind !== 'voice') fail(`--kind must be chat or voice, got '${kind}'`);
   if (kind === 'voice' && !values.pipeline) fail('--pipeline is required for voice (s2s|stt+tts)');
+  const unit = values.unit ?? 'token';
+  if (unit !== 'token' && unit !== 'minute') fail(`--unit must be token or minute, got '${unit}'`);
 
   const master = await prisma.masterProvider.findUnique({ where: { key: providerKey } });
   if (!master) {
@@ -70,8 +81,11 @@ async function main() {
     name,
     kind,
     contextWindowTokens: values.ctx ? parseInt(values.ctx, 10) : null,
+    pricingUnit: unit,
     inputPricePerMillion: values.in ? parseFloat(values.in) : null,
     outputPricePerMillion: values.out ? parseFloat(values.out) : null,
+    inputPricePerMinute: values['in-min'] ? parseFloat(values['in-min']) : null,
+    outputPricePerMinute: values['out-min'] ? parseFloat(values['out-min']) : null,
     voicePipeline: kind === 'voice' ? (values.pipeline ?? null) : null,
     languages: csv(values.languages),
     voices: csv(values.voices),
@@ -88,9 +102,18 @@ async function main() {
   if (row.kind === 'voice') {
     console.log(`  pipeline: ${row.voicePipeline}  languages: ${row.languages.join(', ') || '—'}`);
     console.log(`  voices: ${row.voices.join(', ') || '—'}`);
-  } else {
+  }
+  if (row.pricingUnit === 'minute') {
+    console.log(
+      `  $in/out per MIN: ${row.inputPricePerMinute ?? '—'}/${row.outputPricePerMinute ?? '—'}`,
+    );
+  } else if (row.kind === 'chat') {
     console.log(
       `  ctx: ${row.contextWindowTokens ?? '—'}  $in/out per 1M: ${row.inputPricePerMillion ?? '—'}/${row.outputPricePerMillion ?? '—'}`,
+    );
+  } else {
+    console.log(
+      `  $in/out per 1M audio tokens: ${row.inputPricePerMillion ?? '—'}/${row.outputPricePerMillion ?? '—'}`,
     );
   }
   console.log('Now add it in LLM Ops → Models → Add model.');
