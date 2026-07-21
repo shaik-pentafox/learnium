@@ -5,6 +5,7 @@ import {
   MessagesSquare,
   Users,
   Drama,
+  Trophy,
   BarChart3,
   Cpu,
   Settings,
@@ -48,6 +49,12 @@ const NAV: NavItem[] = [
     to: '/users',
     icon: Users,
     roles: ['SUPER_ADMIN', 'TRAINER'],
+  },
+  {
+    label: 'Leaderboard',
+    to: '/leaderboard',
+    icon: Trophy,
+    roles: ALL,
   },
   {
     label: 'Report',

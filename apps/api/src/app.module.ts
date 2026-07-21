@@ -21,6 +21,7 @@ import { SessionsModule } from './modules/sessions/sessions.module';
 import { RealtimeModule } from './modules/realtime/realtime.module';
 import { LlmOpsModule } from './modules/llm-ops/llm-ops.module';
 import { DashboardModule } from './modules/dashboard/dashboard.module';
+import { LeaderboardModule } from './modules/leaderboard/leaderboard.module';
 import { VoiceModule } from './modules/voice/voice.module';
 import type { Env } from './core/config/env.schema';
 
@@ -53,6 +54,7 @@ import type { Env } from './core/config/env.schema';
     SessionsModule,
     LlmOpsModule,
     DashboardModule,
+    LeaderboardModule,
     VoiceModule,
     RealtimeModule,
   ],
