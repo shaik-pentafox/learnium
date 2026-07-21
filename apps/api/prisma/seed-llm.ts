@@ -102,10 +102,21 @@ const MASTER_MODELS: SeedMasterModel[] = [
     providerKey: 'google', key: 'gemini-2.0-flash', name: 'Gemini 2.0 Flash', kind: 'chat',
     contextWindowTokens: 1_048_576, inputPricePerMillion: 0.1, outputPricePerMillion: 0.4,
   },
+  // Rolling aliases. Google gates the pinned ids above ("no longer available to
+  // new users"), so a freshly created key can only reach the `-latest` ones —
+  // prefer these as the primary on new accounts.
+  {
+    providerKey: 'google', key: 'gemini-flash-latest', name: 'Gemini Flash (Latest)', kind: 'chat',
+    contextWindowTokens: 1_048_576, inputPricePerMillion: 0.3, outputPricePerMillion: 2.5,
+  },
+  {
+    providerKey: 'google', key: 'gemini-flash-lite-latest', name: 'Gemini Flash Lite (Latest)', kind: 'chat',
+    contextWindowTokens: 1_048_576, inputPricePerMillion: 0.1, outputPricePerMillion: 0.4,
+  },
   // ── Google voice (S2S Live API, prices per 1M audio tokens).
   //    gemini-2.0-flash-live-001 was deprecated — remapped to 3.1 below. ──
   {
-    providerKey: 'google', key: 'gemini-2.5-flash-preview-native-audio-dialog', name: 'Gemini 2.5 Flash Native Audio', kind: 'voice',
+    providerKey: 'google', key: 'gemini-2.5-flash-native-audio-latest', name: 'Gemini 2.5 Flash Native Audio', kind: 'voice',
     voicePipeline: 's2s',
     inputPricePerMillion: 3.0, outputPricePerMillion: 12.0,
     languages: ['en-IN', 'hi-IN', 'bn-IN', 'ta-IN', 'te-IN', 'mr-IN', 'gu-IN', 'kn-IN', 'ml-IN'],
@@ -142,6 +153,9 @@ const RETIRED_MODEL_KEYS: Record<string, string> = {
   'gpt-4o-realtime-preview': 'gpt-realtime',
   'gpt-4o-mini-realtime-preview': 'gpt-realtime-mini',
   'gemini-2.0-flash-live-001': 'gemini-3.1-flash-live-preview',
+  // Google renamed the native-audio preview to a `-latest` alias; the pinned
+  // preview id 404s on keys created after the rename.
+  'gemini-2.5-flash-preview-native-audio-dialog': 'gemini-2.5-flash-native-audio-latest',
 };
 
 /** Remap one retired model key to its replacement. Handles both shapes:

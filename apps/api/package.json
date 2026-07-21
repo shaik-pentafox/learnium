@@ -11,6 +11,8 @@
     "lint": "eslint 'src/**/*.ts'",
     "typecheck": "tsc --noEmit",
     "seed:llm": "node --env-file=.env -r ts-node/register prisma/seed-llm.ts",
+    "seed:demo": "node --env-file=.env -r ts-node/register prisma/seed-demo-sessions.ts",
+    "seed:models": "node --env-file=.env -r ts-node/register prisma/seed-provider-models.ts",
     "model:add": "node --env-file=.env -r ts-node/register prisma/add-master-model.ts"
   },
   "dependencies": {
